@@ -101,6 +101,15 @@ XAI 토픽 없이 카메라만으로 teacher dataset을 만들려면:
   --sample-every-n 8
 ```
 
+여러 bag를 하나의 학습셋으로 묶을 수도 있다:
+
+```bash
+/usr/bin/python3 scripts/export_camera_only_teacher_dataset.py \
+  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag /home/byeongjae/bagfiles/1.made_map/camera_right.bag \
+  --output-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/made_map_camera_lr \
+  --sample-every-n 24
+```
+
 생성 결과:
 
 - `images/sample_xxxxx_prev.jpg`
@@ -113,6 +122,8 @@ XAI 토픽 없이 카메라만으로 teacher dataset을 만들려면:
 - `temporal_image_paths`
 - `motion_summary`
 - `teacher_prompt_camera_only_ko`
+- `source_bag`
+- `source_bag_stem`
 
 가 함께 들어간다.
 

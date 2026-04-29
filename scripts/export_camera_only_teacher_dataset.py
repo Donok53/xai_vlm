@@ -42,7 +42,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Export camera-only temporal teacher dataset from ROS bag."
     )
-    parser.add_argument("--bag", required=True)
+    parser.add_argument("--bag", required=True, nargs="+")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--image-topic", default="/camera/color/image_raw")
     parser.add_argument("--sample-every-n", type=int, default=8)
@@ -181,72 +181,80 @@ def build_camera_only_prompt(sample):
 
 def main():
     args = parse_args()
-    bag_path = Path(args.bag).expanduser().resolve()
+    bag_paths = [Path(bag).expanduser().resolve() for bag in args.bag]
     output_dir = Path(args.output_dir).expanduser().resolve()
     ensure_dirs(output_dir)
 
     bridge = CvBridge()
-    frames = deque(maxlen=3)
-    frame_index = -1
     exported = 0
 
     metadata_path = output_dir / "metadata" / "teacher_dataset.jsonl"
-    with rosbag.Bag(str(bag_path)) as bag, metadata_path.open("w", encoding="utf-8") as metadata_file:
-        for topic, msg, _ in bag.read_messages(topics=[args.image_topic]):
-            if topic != args.image_topic:
-                continue
-            frame_index += 1
-            image_bgr = bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-            frames.append(
-                {
-                    "stamp": float(msg.header.stamp.to_sec()),
-                    "frame_index": frame_index,
-                    "image_bgr": image_bgr,
-                }
-            )
-            if len(frames) < 3:
-                continue
-            center = frames[1]
-            if (int(center["frame_index"]) % max(1, int(args.sample_every_n))) != 0:
-                continue
+    with metadata_path.open("w", encoding="utf-8") as metadata_file:
+        for bag_path in bag_paths:
+            frames = deque(maxlen=3)
+            frame_index = -1
+            bag_stem = bag_path.stem
 
-            prev_frame = frames[0]
-            curr_frame = frames[1]
-            next_frame = frames[2]
+            with rosbag.Bag(str(bag_path)) as bag:
+                for topic, msg, _ in bag.read_messages(topics=[args.image_topic]):
+                    if topic != args.image_topic:
+                        continue
+                    frame_index += 1
+                    image_bgr = bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+                    frames.append(
+                        {
+                            "stamp": float(msg.header.stamp.to_sec()),
+                            "frame_index": frame_index,
+                            "image_bgr": image_bgr,
+                        }
+                    )
+                    if len(frames) < 3:
+                        continue
+                    center = frames[1]
+                    if (int(center["frame_index"]) % max(1, int(args.sample_every_n))) != 0:
+                        continue
 
-            sample_id = "sample_{:05d}".format(exported)
-            image_rel_paths = []
-            for suffix, frame in [("prev", prev_frame), ("current", curr_frame), ("next", next_frame)]:
-                rel_path = Path("images") / "{}_{}.jpg".format(sample_id, suffix)
-                abs_path = output_dir / rel_path
-                cv2.imwrite(
-                    str(abs_path),
-                    frame["image_bgr"],
-                    [int(cv2.IMWRITE_JPEG_QUALITY), int(args.jpeg_quality)],
-                )
-                image_rel_paths.append(str(rel_path))
+                    prev_frame = frames[0]
+                    curr_frame = frames[1]
+                    next_frame = frames[2]
 
-            motion_summary = summarize_flow(
-                prev_frame["image_bgr"],
-                curr_frame["image_bgr"],
-                next_frame["image_bgr"],
-                args.flow_image_side_px,
-                args.flow_motion_threshold,
-            )
-            row = {
-                "sample_id": sample_id,
-                "stamp": curr_frame["stamp"],
-                "frame_index": int(curr_frame["frame_index"]),
-                "image_path": image_rel_paths[1],
-                "temporal_image_paths": image_rel_paths,
-                "motion_summary": motion_summary,
-            }
-            row["teacher_prompt_camera_only_ko"] = build_camera_only_prompt(row)
-            metadata_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    sample_id = "{}_sample_{:05d}".format(bag_stem, exported)
+                    image_rel_paths = []
+                    for suffix, frame in [("prev", prev_frame), ("current", curr_frame), ("next", next_frame)]:
+                        rel_path = Path("images") / "{}_{}.jpg".format(sample_id, suffix)
+                        abs_path = output_dir / rel_path
+                        cv2.imwrite(
+                            str(abs_path),
+                            frame["image_bgr"],
+                            [int(cv2.IMWRITE_JPEG_QUALITY), int(args.jpeg_quality)],
+                        )
+                        image_rel_paths.append(str(rel_path))
 
-            exported += 1
-            if args.max_samples > 0 and exported >= int(args.max_samples):
-                break
+                    motion_summary = summarize_flow(
+                        prev_frame["image_bgr"],
+                        curr_frame["image_bgr"],
+                        next_frame["image_bgr"],
+                        args.flow_image_side_px,
+                        args.flow_motion_threshold,
+                    )
+                    row = {
+                        "sample_id": sample_id,
+                        "source_bag": str(bag_path),
+                        "source_bag_stem": bag_stem,
+                        "stamp": curr_frame["stamp"],
+                        "frame_index": int(curr_frame["frame_index"]),
+                        "image_path": image_rel_paths[1],
+                        "temporal_image_paths": image_rel_paths,
+                        "motion_summary": motion_summary,
+                    }
+                    row["teacher_prompt_camera_only_ko"] = build_camera_only_prompt(row)
+                    metadata_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+                    exported += 1
+                    if args.max_samples > 0 and exported >= int(args.max_samples):
+                        break
+                if args.max_samples > 0 and exported >= int(args.max_samples):
+                    break
 
     print("exported_samples={}".format(exported))
     print("metadata={}".format(metadata_path))
