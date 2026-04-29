@@ -202,6 +202,48 @@ raw 응답에서 허용 라벨을 다시 뽑는 단계가 필요하다.
   --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_teacher
 ```
 
+## 5. One-shot Camera-only Pipeline
+
+라벨링부터 student 학습까지 한 번에 돌리려면:
+
+```bash
+/usr/bin/python3 scripts/run_camera_only_pipeline.py \
+  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag /home/byeongjae/bagfiles/1.made_map/camera_right.bag \
+  --output-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/made_map_camera_lr_full \
+  --sample-every-n 24 \
+  --model qwen2.5vl:32b-q4_K_M \
+  --prompt-mode camera_reason_temporal \
+  --timeout-s 1800 \
+  --retries 1 \
+  --prewarm \
+  --max-image-side-px 256 \
+  --annotate-jpeg-quality 60 \
+  --num-predict 96 \
+  --num-ctx 384 \
+  --overwrite
+```
+
+빠른 점검용으로 일부 샘플만 먼저 돌릴 수도 있다:
+
+```bash
+/usr/bin/python3 scripts/run_camera_only_pipeline.py \
+  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag /home/byeongjae/bagfiles/1.made_map/camera_right.bag \
+  --output-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/made_map_camera_lr_quick \
+  --sample-every-n 24 \
+  --max-samples 120 \
+  --annotate-limit 120 \
+  --model qwen2.5vl:32b-q4_K_M \
+  --prompt-mode camera_reason_temporal \
+  --timeout-s 1800 \
+  --retries 1 \
+  --prewarm \
+  --max-image-side-px 256 \
+  --annotate-jpeg-quality 60 \
+  --num-predict 96 \
+  --num-ctx 384 \
+  --overwrite
+```
+
 출력:
 
 - `student_baseline/student_baseline.joblib`
