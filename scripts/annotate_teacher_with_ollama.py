@@ -41,7 +41,7 @@ def parse_args():
     parser.add_argument("--metadata-path", default="")
     parser.add_argument("--output-path", default="")
     parser.add_argument("--endpoint", default="http://127.0.0.1:11434/api/chat")
-    parser.add_argument("--model", default="qwen2.5vl:7b")
+    parser.add_argument("--model", default="qwen2.5vl:32b-q4_K_M")
     parser.add_argument(
         "--prompt-mode",
         choices=["metadata", "class_only"],
