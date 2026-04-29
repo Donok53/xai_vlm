@@ -2,6 +2,8 @@
 import argparse
 import base64
 import json
+import socket
+import time
 from pathlib import Path
 from urllib import request
 
@@ -50,6 +52,9 @@ def parse_args():
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--timeout-s", type=float, default=900.0)
+    parser.add_argument("--retries", type=int, default=2)
+    parser.add_argument("--retry-sleep-s", type=float, default=5.0)
     return parser.parse_args()
 
 
@@ -125,7 +130,7 @@ def choose_prompt(row, prompt_mode):
     return build_class_only_prompt(row)
 
 
-def ollama_chat(endpoint, model, prompt, image_path, temperature):
+def ollama_chat(endpoint, model, prompt, image_path, temperature, timeout_s, retries, retry_sleep_s):
     image_base64 = encode_image_base64(image_path)
     payload = {
         "model": model,
@@ -147,8 +152,29 @@ def ollama_chat(endpoint, model, prompt, image_path, temperature):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with request.urlopen(req, timeout=180.0) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    last_error = None
+    for attempt in range(int(retries) + 1):
+        try:
+            with request.urlopen(req, timeout=float(timeout_s)) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            break
+        except socket.timeout as exc:
+            last_error = exc
+        except Exception as exc:
+            last_error = exc
+        if attempt < int(retries):
+            print(
+                "request failed for model {} (attempt {}/{}): {} | retry in {:.1f}s".format(
+                    model,
+                    attempt + 1,
+                    int(retries) + 1,
+                    last_error,
+                    float(retry_sleep_s),
+                )
+            )
+            time.sleep(float(retry_sleep_s))
+    else:
+        raise last_error
     message = (data.get("message") or {}).get("content") or ""
     return {
         "raw_response": message,
@@ -193,6 +219,9 @@ def main():
                 prompt,
                 image_path,
                 args.temperature,
+                args.timeout_s,
+                args.retries,
+                args.retry_sleep_s,
             )
             out_row = {
                 "sample_id": sample_id,
