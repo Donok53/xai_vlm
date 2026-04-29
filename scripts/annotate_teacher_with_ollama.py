@@ -5,6 +5,33 @@ import json
 from pathlib import Path
 from urllib import request
 
+ALLOWED_LABELS_KO = [
+    "사람",
+    "자전거",
+    "자동차",
+    "오토바이",
+    "기차",
+    "트럭",
+    "신호등",
+    "소화전",
+    "정지 표지판",
+    "주차 미터기",
+    "벤치",
+    "고양이",
+    "개",
+    "가방",
+    "우산",
+    "손가방",
+    "캐리어",
+    "공",
+    "병",
+    "컵",
+    "와인잔",
+    "책",
+    "시계",
+    "벽",
+]
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -14,7 +41,12 @@ def parse_args():
     parser.add_argument("--metadata-path", default="")
     parser.add_argument("--output-path", default="")
     parser.add_argument("--endpoint", default="http://127.0.0.1:11434/api/chat")
-    parser.add_argument("--model", default="moondream")
+    parser.add_argument("--model", default="qwen2.5vl:3b")
+    parser.add_argument(
+        "--prompt-mode",
+        choices=["metadata", "class_only"],
+        default="class_only",
+    )
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -55,6 +87,42 @@ def extract_json_object(text):
 def encode_image_base64(path):
     with open(path, "rb") as handle:
         return base64.b64encode(handle.read()).decode("ascii")
+
+
+def build_class_only_prompt(row):
+    planner_reason = str(row.get("planner_reason") or "unknown")
+    motion_state = str(row.get("motion_state") or "unknown")
+    event_label = str(row.get("event_label") or "unknown")
+    obstacle = row.get("obstacle_summary") or {}
+    near_range = obstacle.get("near_raw_min_range_m")
+
+    return "\n".join(
+        [
+            "너는 자율주행용 오프라인 teacher 모델이다.",
+            "이미지에서 planner/LiDAR와 가장 관련 있는 대표 객체를 허용 라벨 중 정확히 하나만 선택하라.",
+            "허용 라벨에 없거나 확실하지 않으면 반드시 '벽'을 선택하라.",
+            "",
+            "주행 문맥:",
+            "- event_label: {}".format(event_label),
+            "- planner_reason: {}".format(planner_reason),
+            "- motion_state: {}".format(motion_state),
+            "- near_raw_min_range_m: {}".format(near_range),
+            "",
+            "허용 라벨:",
+            ", ".join(ALLOWED_LABELS_KO),
+            "",
+            "규칙:",
+            "- 설명 문장은 쓰지 마라.",
+            "- 반드시 JSON만 출력하라.",
+            '- 형식: {"primary_object_ko":"허용라벨중하나","confidence":0.0}',
+        ]
+    )
+
+
+def choose_prompt(row, prompt_mode):
+    if prompt_mode == "metadata":
+        return str(row.get("teacher_prompt_ko") or "")
+    return build_class_only_prompt(row)
 
 
 def ollama_chat(endpoint, model, prompt, image_path, temperature):
@@ -118,18 +186,21 @@ def main():
                 continue
 
             image_path = dataset_dir / str(row["image_path"])
+            prompt = choose_prompt(row, args.prompt_mode)
             result = ollama_chat(
                 args.endpoint,
                 args.model,
-                str(row.get("teacher_prompt_ko") or ""),
+                prompt,
                 image_path,
                 args.temperature,
             )
             out_row = {
                 "sample_id": sample_id,
                 "model": args.model,
+                "prompt_mode": args.prompt_mode,
                 "image_path": row.get("image_path"),
                 "event_label": row.get("event_label"),
+                "teacher_prompt_used": prompt,
                 "teacher_output_raw": result["raw_response"],
                 "teacher_output_json": result["parsed_json"],
             }

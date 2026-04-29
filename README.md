@@ -91,7 +91,8 @@ source /opt/ros/noetic/setup.bash
 ```bash
 /usr/bin/python3 scripts/annotate_teacher_with_ollama.py \
   --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_teacher \
-  --model moondream
+  --model qwen2.5vl:3b \
+  --prompt-mode class_only
 ```
 
 출력:
@@ -102,10 +103,17 @@ source /opt/ros/noetic/setup.bash
 
 - `sample_id`
 - `model`
+- `prompt_mode`
 - `teacher_output_raw`
 - `teacher_output_json`
 
 형태로 저장된다.
+
+권장:
+
+- teacher 품질이 중요하므로 기본 teacher는 `qwen2.5vl:3b`
+- 프롬프트는 `class_only`
+  - 허용 클래스 중 하나만 선택하게 해서 student용 라벨 품질을 우선 높인다.
 
 ## 3. Teacher 라벨 정규화
 
