@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 import base64
+import io
 import json
 import socket
 import time
 from pathlib import Path
 from urllib import request
+
+from PIL import Image
 
 ALLOWED_LABELS_KO = [
     "사람",
@@ -55,6 +58,12 @@ def parse_args():
     parser.add_argument("--timeout-s", type=float, default=900.0)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--retry-sleep-s", type=float, default=5.0)
+    parser.add_argument("--max-image-side-px", type=int, default=336)
+    parser.add_argument("--jpeg-quality", type=int, default=75)
+    parser.add_argument("--num-predict", type=int, default=32)
+    parser.add_argument("--num-ctx", type=int, default=512)
+    parser.add_argument("--keep-alive", default="30m")
+    parser.add_argument("--prewarm", action="store_true")
     return parser.parse_args()
 
 
@@ -89,9 +98,20 @@ def extract_json_object(text):
     return None
 
 
-def encode_image_base64(path):
-    with open(path, "rb") as handle:
-        return base64.b64encode(handle.read()).decode("ascii")
+def encode_image_base64(path, max_image_side_px, jpeg_quality):
+    with Image.open(path) as image:
+        image = image.convert("RGB")
+        max_side = max(1, int(max_image_side_px))
+        if max(image.size) > max_side:
+            scale = float(max_side) / float(max(image.size))
+            resized = (
+                max(1, int(round(image.size[0] * scale))),
+                max(1, int(round(image.size[1] * scale))),
+            )
+            image = image.resize(resized, Image.BICUBIC)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=int(jpeg_quality), optimize=True)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def build_class_only_prompt(row):
@@ -130,11 +150,26 @@ def choose_prompt(row, prompt_mode):
     return build_class_only_prompt(row)
 
 
-def ollama_chat(endpoint, model, prompt, image_path, temperature, timeout_s, retries, retry_sleep_s):
-    image_base64 = encode_image_base64(image_path)
+def ollama_chat(
+    endpoint,
+    model,
+    prompt,
+    image_path,
+    temperature,
+    timeout_s,
+    retries,
+    retry_sleep_s,
+    max_image_side_px,
+    jpeg_quality,
+    num_predict,
+    num_ctx,
+    keep_alive,
+):
+    image_base64 = encode_image_base64(image_path, max_image_side_px, jpeg_quality)
     payload = {
         "model": model,
         "stream": False,
+        "keep_alive": keep_alive,
         "messages": [
             {
                 "role": "user",
@@ -144,6 +179,8 @@ def ollama_chat(endpoint, model, prompt, image_path, temperature, timeout_s, ret
         ],
         "options": {
             "temperature": float(temperature),
+            "num_predict": int(num_predict),
+            "num_ctx": int(num_ctx),
         },
     }
     req = request.Request(
@@ -158,6 +195,13 @@ def ollama_chat(endpoint, model, prompt, image_path, temperature, timeout_s, ret
             with request.urlopen(req, timeout=float(timeout_s)) as response:
                 data = json.loads(response.read().decode("utf-8"))
             break
+        except request.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            last_error = RuntimeError("HTTP {}: {}".format(exc.code, body or exc.reason))
         except socket.timeout as exc:
             last_error = exc
         except Exception as exc:
@@ -183,6 +227,33 @@ def ollama_chat(endpoint, model, prompt, image_path, temperature, timeout_s, ret
     }
 
 
+def ollama_prewarm(endpoint, model, timeout_s, keep_alive, num_ctx):
+    payload = {
+        "model": model,
+        "stream": False,
+        "keep_alive": keep_alive,
+        "messages": [
+            {
+                "role": "user",
+                "content": "JSON만 출력하라. {\"primary_object_ko\":\"벽\",\"confidence\":0.0}",
+            }
+        ],
+        "options": {
+            "temperature": 0.0,
+            "num_predict": 8,
+            "num_ctx": int(num_ctx),
+        },
+    }
+    req = request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=float(timeout_s)) as response:
+        _ = response.read()
+
+
 def main():
     args = parse_args()
     dataset_dir = Path(args.dataset_dir).expanduser().resolve()
@@ -199,6 +270,10 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     rows = read_jsonl(metadata_path)
+    if args.prewarm:
+        print("prewarming model {} ...".format(args.model))
+        ollama_prewarm(args.endpoint, args.model, args.timeout_s, args.keep_alive, args.num_ctx)
+        print("prewarm done")
     done_ids = set()
     if output_path.exists() and not args.overwrite:
         for row in read_jsonl(output_path):
@@ -222,6 +297,11 @@ def main():
                 args.timeout_s,
                 args.retries,
                 args.retry_sleep_s,
+                args.max_image_side_px,
+                args.jpeg_quality,
+                args.num_predict,
+                args.num_ctx,
+                args.keep_alive,
             )
             out_row = {
                 "sample_id": sample_id,
