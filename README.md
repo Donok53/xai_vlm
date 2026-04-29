@@ -31,6 +31,11 @@
    - 이미지 grayscale 특징 + planner/LiDAR 문맥 특징으로
      가벼운 `sklearn` baseline student를 학습한다.
 
+5. `scripts/export_camera_only_teacher_dataset.py`
+   - XAI 토픽 없이 카메라 이미지만으로 teacher dataset을 만든다.
+   - `prev/current/next` 3프레임을 같이 저장하고 optical flow 기반 움직임 요약을 metadata에 넣는다.
+   - camera-only teacher가 “왜 그런 주행을 했는지”를 시각 단서만으로 답하게 만들기 위한 경로다.
+
 ## 구조
 
 ```text
@@ -41,6 +46,7 @@ xai_autonomy_vlm_teacher_distill/
 │   └── .gitkeep
 └── scripts/
     ├── annotate_teacher_with_ollama.py
+    ├── export_camera_only_teacher_dataset.py
     └── export_teacher_dataset.py
     ├── prepare_teacher_labels.py
     └── train_student_baseline.py
@@ -84,6 +90,32 @@ source /opt/ros/noetic/setup.bash
 - `teacher_prompt_ko`
 - 원본 `event_log`, `planner_snapshot`
 
+### Camera-only Temporal Export
+
+XAI 토픽 없이 카메라만으로 teacher dataset을 만들려면:
+
+```bash
+/usr/bin/python3 scripts/export_camera_only_teacher_dataset.py \
+  --bag /home/byeongjae/bagfiles/record_real_20260422_180049.bag \
+  --output-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_camera_only \
+  --sample-every-n 8
+```
+
+생성 결과:
+
+- `images/sample_xxxxx_prev.jpg`
+- `images/sample_xxxxx_current.jpg`
+- `images/sample_xxxxx_next.jpg`
+- `metadata/teacher_dataset.jsonl`
+
+여기에는:
+
+- `temporal_image_paths`
+- `motion_summary`
+- `teacher_prompt_camera_only_ko`
+
+가 함께 들어간다.
+
 ## 2. Ollama Teacher Annotation
 
 예시:
@@ -115,6 +147,21 @@ PY
 - `teacher_output_json`
 
 형태로 저장된다.
+
+camera-only temporal teacher 예시:
+
+```bash
+/usr/bin/python3 scripts/annotate_teacher_with_ollama.py \
+  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_camera_only \
+  --model qwen2.5vl:32b-q4_K_M \
+  --prompt-mode camera_reason_temporal \
+  --prewarm \
+  --timeout-s 1800 \
+  --max-image-side-px 256 \
+  --jpeg-quality 60 \
+  --num-predict 48 \
+  --num-ctx 384
+```
 
 권장:
 

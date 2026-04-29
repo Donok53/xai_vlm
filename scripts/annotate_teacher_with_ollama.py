@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument("--model", default="qwen2.5vl:32b-q4_K_M")
     parser.add_argument(
         "--prompt-mode",
-        choices=["metadata", "class_only"],
+        choices=["metadata", "class_only", "camera_reason_temporal"],
         default="class_only",
     )
     parser.add_argument("--limit", type=int, default=0)
@@ -147,14 +147,24 @@ def build_class_only_prompt(row):
 def choose_prompt(row, prompt_mode):
     if prompt_mode == "metadata":
         return str(row.get("teacher_prompt_ko") or "")
+    if prompt_mode == "camera_reason_temporal":
+        return str(row.get("teacher_prompt_camera_only_ko") or "")
     return build_class_only_prompt(row)
+
+
+def choose_image_paths(dataset_dir, row, prompt_mode):
+    if prompt_mode == "camera_reason_temporal":
+        rel_paths = row.get("temporal_image_paths") or []
+        if rel_paths:
+            return [dataset_dir / str(path) for path in rel_paths]
+    return [dataset_dir / str(row["image_path"])]
 
 
 def ollama_chat(
     endpoint,
     model,
     prompt,
-    image_path,
+    image_paths,
     temperature,
     timeout_s,
     retries,
@@ -165,7 +175,9 @@ def ollama_chat(
     num_ctx,
     keep_alive,
 ):
-    image_base64 = encode_image_base64(image_path, max_image_side_px, jpeg_quality)
+    image_base64_list = [
+        encode_image_base64(path, max_image_side_px, jpeg_quality) for path in image_paths
+    ]
     payload = {
         "model": model,
         "stream": False,
@@ -174,7 +186,7 @@ def ollama_chat(
             {
                 "role": "user",
                 "content": prompt,
-                "images": [image_base64],
+                "images": image_base64_list,
             }
         ],
         "options": {
@@ -286,13 +298,13 @@ def main():
             if sample_id in done_ids:
                 continue
 
-            image_path = dataset_dir / str(row["image_path"])
+            image_paths = choose_image_paths(dataset_dir, row, args.prompt_mode)
             prompt = choose_prompt(row, args.prompt_mode)
             result = ollama_chat(
                 args.endpoint,
                 args.model,
                 prompt,
-                image_path,
+                image_paths,
                 args.temperature,
                 args.timeout_s,
                 args.retries,
@@ -308,6 +320,7 @@ def main():
                 "model": args.model,
                 "prompt_mode": args.prompt_mode,
                 "image_path": row.get("image_path"),
+                "temporal_image_paths": row.get("temporal_image_paths"),
                 "event_label": row.get("event_label"),
                 "teacher_prompt_used": prompt,
                 "teacher_output_raw": result["raw_response"],
