@@ -23,6 +23,14 @@
      teacher annotation을 JSONL로 저장한다.
    - 런타임이 아니라 오프라인 데이터 생성용이다.
 
+3. `scripts/prepare_teacher_labels.py`
+   - `teacher_output_json`이 비어 있어도 raw 응답에서 허용 라벨을 최대한 복구한다.
+   - 너무 드문 클래스는 기본적으로 `벽`으로 접어 baseline 학습이 가능하게 만든다.
+
+4. `scripts/train_student_baseline.py`
+   - 이미지 grayscale 특징 + planner/LiDAR 문맥 특징으로
+     가벼운 `sklearn` baseline student를 학습한다.
+
 ## 구조
 
 ```text
@@ -34,6 +42,8 @@ xai_autonomy_vlm_teacher_distill/
 └── scripts/
     ├── annotate_teacher_with_ollama.py
     └── export_teacher_dataset.py
+    ├── prepare_teacher_labels.py
+    └── train_student_baseline.py
 ```
 
 ## 권장 실행 환경
@@ -97,6 +107,32 @@ source /opt/ros/noetic/setup.bash
 
 형태로 저장된다.
 
+## 3. Teacher 라벨 정규화
+
+현재 작은 로컬 VLM은 JSON을 안정적으로 주지 않을 수 있으므로,
+raw 응답에서 허용 라벨을 다시 뽑는 단계가 필요하다.
+
+```bash
+/usr/bin/python3 scripts/prepare_teacher_labels.py \
+  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_teacher
+```
+
+출력:
+
+- `metadata/prepared_teacher_labels.jsonl`
+
+## 4. Baseline Student 학습
+
+```bash
+/usr/bin/python3 scripts/train_student_baseline.py \
+  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_teacher
+```
+
+출력:
+
+- `student_baseline/student_baseline.joblib`
+- `student_baseline/metrics.json`
+
 ## 의도한 다음 단계
 
 이 프로젝트의 목표는 바로 student 학습까지 끝내는 것이 아니라,
@@ -104,7 +140,7 @@ source /opt/ros/noetic/setup.bash
 
 1. bag -> teacher dataset export
 2. dataset -> VLM teacher label
-3. teacher label 품질 확인
+3. teacher label 정규화
 4. 작은 student classifier / template selector 학습
 
 ## 참고
