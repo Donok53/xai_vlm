@@ -82,6 +82,14 @@ def extract_json_object(text):
     raw = str(text or "").strip()
     if not raw:
         return None
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines:
+            if lines[0].strip().startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            raw = "\n".join(lines).strip()
     try:
         return json.loads(raw)
     except Exception:
@@ -148,7 +156,20 @@ def choose_prompt(row, prompt_mode):
     if prompt_mode == "metadata":
         return str(row.get("teacher_prompt_ko") or "")
     if prompt_mode == "camera_reason_temporal":
-        return str(row.get("teacher_prompt_camera_only_ko") or "")
+        base = str(row.get("teacher_prompt_camera_only_ko") or "")
+        compact = "\n".join(
+            [
+                base,
+                "",
+                "추가 규칙:",
+                "- 코드펜스(````json`)를 절대 쓰지 마라.",
+                "- scene_summary_ko는 12자 이하의 아주 짧은 구문으로 쓴다.",
+                "- driving_reason_ko는 18자 이하의 아주 짧은 구문으로 쓴다.",
+                "- 반드시 한 줄 JSON 객체 하나만 출력한다.",
+                '- 출력 형식: {"primary_object_ko":"","dynamic":"static|dynamic|unknown","scene_summary_ko":"","driving_reason_ko":"","confidence":0.0}',
+            ]
+        )
+        return compact
     return build_class_only_prompt(row)
 
 

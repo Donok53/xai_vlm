@@ -170,7 +170,7 @@ camera-only temporal teacher 예시:
   --timeout-s 1800 \
   --max-image-side-px 256 \
   --jpeg-quality 60 \
-  --num-predict 48 \
+  --num-predict 96 \
   --num-ctx 384
 ```
 
