@@ -181,8 +181,8 @@ class StudentCameraOnlyNode(object):
         self.sample_every_n = int(get_private_param("sample_every_n", 8, explicit_args))
         self.flow_image_side_px = int(get_private_param("flow_image_side_px", 320, explicit_args))
         self.flow_motion_threshold = float(get_private_param("flow_motion_threshold", 1.5, explicit_args))
-        self.display_window = _coerce_bool(get_private_param("display_window", False, explicit_args))
-        self.launch_rviz = _coerce_bool(get_private_param("launch_rviz", True, explicit_args))
+        self.display_window = _coerce_bool(get_private_param("display_window", True, explicit_args))
+        self.launch_rviz = _coerce_bool(get_private_param("launch_rviz", False, explicit_args))
         self.rviz_config_path = Path(
             get_private_param(
                 "rviz_config_path",

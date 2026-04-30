@@ -314,7 +314,14 @@ source /opt/ros/noetic/setup.bash
 /usr/bin/python3 scripts/ros_student_camera_only_node.py _sample_every_n:=8
 ```
 
-기본으로 RViz가 같이 뜨고, `/student_xai/overlay`를 바로 보여준다.
+기본으로 OpenCV 실시간 창이 바로 뜨고, 카메라 장면 위에 student의 생각이 오버레이된다.
+`q`를 누르면 종료된다.
+
+RViz를 같이 띄우고 싶으면:
+
+```bash
+/usr/bin/python3 scripts/ros_student_camera_only_node.py _sample_every_n:=8 _launch_rviz:=true
+```
 
 터미널 3:
 
