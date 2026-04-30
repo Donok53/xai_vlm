@@ -3,7 +3,6 @@ import argparse
 import json
 from pathlib import Path
 
-import cv2
 import joblib
 import numpy as np
 from sklearn.feature_extraction import DictVectorizer
@@ -11,6 +10,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+
+from student_baseline_common import build_context_feature, load_image_feature, read_jsonl
 
 
 def parse_args():
@@ -24,46 +25,6 @@ def parse_args():
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args()
-
-
-def read_jsonl(path):
-    rows = []
-    with open(path, "r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            rows.append(json.loads(line))
-    return rows
-
-
-def load_image_feature(path, image_size):
-    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-    if image is None:
-        return np.zeros((image_size * image_size,), dtype=np.float32)
-    image = cv2.resize(image, (image_size, image_size), interpolation=cv2.INTER_AREA)
-    feature = image.astype(np.float32).reshape(-1) / 255.0
-    return feature
-
-
-def build_context_feature(row):
-    obstacle = row.get("obstacle_summary") or {}
-    centroid = obstacle.get("near_raw_centroid_xyz") or {}
-    feature = {
-        "event_label={}".format(row.get("event_label") or "unknown"): 1.0,
-        "motion_state={}".format(row.get("motion_state") or "unknown"): 1.0,
-        "planner_reason={}".format(row.get("planner_reason") or "unknown"): 1.0,
-        "path_blocked": float(bool(row.get("path_blocked"))),
-        "near_raw_points": float(obstacle.get("near_raw_points") or 0.0),
-        "near_raw_min_range_m": float(obstacle.get("near_raw_min_range_m") or 0.0),
-        "near_raw_min_x_m": float(obstacle.get("near_raw_min_x_m") or 0.0),
-        "near_raw_centroid_x": float(centroid.get("x") or 0.0),
-        "near_raw_centroid_y": float(centroid.get("y") or 0.0),
-        "near_raw_centroid_z": float(centroid.get("z") or 0.0),
-    }
-    return feature
-
-
 def main():
     args = parse_args()
     dataset_dir = Path(args.dataset_dir).expanduser().resolve()
@@ -145,6 +106,7 @@ def main():
         "image_size": int(args.image_size),
         "feature_dim": int(X.shape[1]),
         "classes": label_encoder.classes_.tolist(),
+        "feature_spec_version": "camera_only_v2",
     }
     model_path = output_dir / "student_baseline.joblib"
     joblib.dump(bundle, model_path)

@@ -148,6 +148,10 @@ def main():
             {
                 "sample_id": sample_id,
                 "image_path": meta.get("image_path"),
+                "temporal_image_paths": meta.get("temporal_image_paths") or [],
+                "source_bag": meta.get("source_bag"),
+                "source_bag_stem": meta.get("source_bag_stem"),
+                "motion_summary": meta.get("motion_summary") or {},
                 "pointcloud_path": meta.get("pointcloud_path"),
                 "event_label": meta.get("event_label"),
                 "planner_reason": meta.get("planner_reason"),
@@ -156,6 +160,7 @@ def main():
                 "pointcloud_summary": meta.get("pointcloud_summary") or {},
                 "obstacle_summary": meta.get("obstacle_summary") or {},
                 "teacher_prompt_ko": meta.get("teacher_prompt_ko"),
+                "teacher_prompt_camera_only_ko": meta.get("teacher_prompt_camera_only_ko"),
                 "teacher_output_raw": ann.get("teacher_output_raw"),
                 "teacher_output_json": ann.get("teacher_output_json"),
                 "label_ko_raw": label_ko,

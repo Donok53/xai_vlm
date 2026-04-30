@@ -244,6 +244,29 @@ raw 응답에서 허용 라벨을 다시 뽑는 단계가 필요하다.
   --overwrite
 ```
 
+## 6. Student 추론 시각화
+
+학습된 student가 카메라 장면을 보고 어떤 대표 객체와 주행 이유를 떠올렸는지 영상으로 보려면:
+
+```bash
+/usr/bin/python3 scripts/infer_student_camera_only_visual.py \
+  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/made_map_camera_lr_full \
+  --show-teacher
+```
+
+결과:
+
+- `student_inference/student_camera_reason.mp4`
+
+window로 바로 보고 싶으면:
+
+```bash
+/usr/bin/python3 scripts/infer_student_camera_only_visual.py \
+  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/made_map_camera_lr_full \
+  --show-teacher \
+  --display-window
+```
+
 출력:
 
 - `student_baseline/student_baseline.joblib`
