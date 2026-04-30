@@ -295,6 +295,40 @@ window로 바로 보고 싶으면:
   --no-display-window
 ```
 
+## 8. rosbag play에 붙여서 ROS 메시지 보기
+
+실제 `rosbag play`를 돌리면서 student 메시지가 ROS 로그와 topic으로 나오게 하려면:
+
+터미널 1:
+
+```bash
+source /opt/ros/noetic/setup.bash
+roscore
+```
+
+터미널 2:
+
+```bash
+cd ~/code/xai_autonomy_vlm_teacher_distill
+source /opt/ros/noetic/setup.bash
+/usr/bin/python3 scripts/ros_student_camera_only_node.py _sample_every_n:=8
+```
+
+터미널 3:
+
+```bash
+source /opt/ros/noetic/setup.bash
+rosbag play --clock /home/byeongjae/bagfiles/1.made_map/camera_left.bag
+```
+
+이때 노드는:
+
+- 로그: `[STUDENT-XAI] ...`
+- 메시지 topic: `/student_xai/camera_reason`
+- overlay image topic: `/student_xai/overlay`
+
+를 내보낸다.
+
 출력:
 
 - `student_baseline/student_baseline.joblib`
