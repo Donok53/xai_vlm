@@ -8,6 +8,7 @@ import joblib
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from export_camera_only_teacher_dataset import infer_ego_motion_ko, infer_scene_state_ko
 from student_baseline_common import build_context_feature, load_image_feature, read_jsonl
 
 
@@ -52,47 +53,44 @@ def load_bgr_or_blank(path, shape):
     return image
 
 
-def infer_dynamic_from_motion(row):
+def describe_motion(row):
     motion = row.get("motion_summary") or {}
     prev = motion.get("prev_to_curr") or {}
     nxt = motion.get("curr_to_next") or {}
-    center_ratio = max(
-        float(prev.get("center_moving_ratio") or 0.0),
-        float(nxt.get("center_moving_ratio") or 0.0),
-    )
-    if center_ratio >= 0.25:
-        return "dynamic"
-    if center_ratio <= 0.05:
-        return "static"
-    return "unknown"
+    raw_motion = motion.get("raw_screen_motion_ko") or motion.get("dominant_motion_ko") or "정지 또는 미미한 움직임"
+    ego_motion = motion.get("ego_motion_ko") or infer_ego_motion_ko(prev, nxt)
+    scene_state = motion.get("scene_state_ko") or infer_scene_state_ko(prev, nxt, ego_motion)
+    return raw_motion, ego_motion, scene_state
 
 
 def build_camera_thought(pred_label, row):
-    motion = row.get("motion_summary") or {}
-    dominant_motion = motion.get("dominant_motion_ko") or "정지 또는 미미한 움직임"
-    dynamic_state = infer_dynamic_from_motion(row)
+    _, ego_motion, scene_state = describe_motion(row)
 
     if pred_label == "사람":
-        if dynamic_state == "dynamic":
+        if scene_state == "동적 객체 영향 큼":
             reason = "사람 움직임이 보여 감속하거나 경로를 조심스럽게 본다."
+        elif ego_motion != "정지":
+            reason = "{} 중 사람과의 간격을 살피며 지나가려 한다고 본다.".format(ego_motion)
         else:
             reason = "사람이 보여 주변을 경계하며 진행한다고 본다."
     elif pred_label == "자동차":
-        if dynamic_state == "dynamic":
+        if scene_state == "동적 객체 영향 큼":
             reason = "차량 움직임이 보여 간격을 두고 진행한다고 본다."
+        elif ego_motion != "정지":
+            reason = "{} 중 차량과의 간격을 확인한다고 본다.".format(ego_motion)
         else:
             reason = "차량이 보여 통로와 간격을 확인한다고 본다."
     elif pred_label == "자전거":
         reason = "자전거가 보여 진행 방향과 접근을 조심한다고 본다."
     elif pred_label == "벽":
-        if dynamic_state == "dynamic":
-            reason = "구조물과 시점 변화가 보여 통로를 천천히 확인한다고 본다."
+        if ego_motion != "정지":
+            reason = "{} 중 통로 구조와 진행 공간을 확인한다고 본다.".format(ego_motion)
         else:
             reason = "정적인 통로 구조가 보여 즉시 회피할 대상은 뚜렷하지 않다고 본다."
     else:
         reason = "{}이 보여 주변 상황을 보수적으로 해석한다고 본다.".format(pred_label)
 
-    scene = "대표 객체: {} / 움직임: {}".format(pred_label, dominant_motion)
+    scene = "대표 객체: {} / 로봇: {}".format(pred_label, ego_motion)
     return scene, reason
 
 
@@ -108,7 +106,13 @@ def wrap_text(text, width=30):
     return lines
 
 
-def render_frame(prev_bgr, curr_bgr, next_bgr, row, pred_label, confidence, show_teacher):
+def format_top_candidates(top_candidates):
+    if not top_candidates:
+        return "후보 없음"
+    return ", ".join("{} {:.2f}".format(item["label_ko"], float(item["confidence"])) for item in top_candidates)
+
+
+def render_frame(prev_bgr, curr_bgr, next_bgr, row, pred_label, confidence, show_teacher, top_candidates):
     h, w = curr_bgr.shape[:2]
     panel_h = 220
     canvas = np.zeros((h + panel_h, w * 3, 3), dtype=np.uint8)
@@ -130,8 +134,7 @@ def render_frame(prev_bgr, curr_bgr, next_bgr, row, pred_label, confidence, show
     sample_id = row.get("sample_id") or "unknown"
     source_bag = row.get("source_bag_stem") or "unknown"
     teacher_label = row.get("label_ko") or row.get("label_ko_raw") or "n/a"
-    motion = row.get("motion_summary") or {}
-    dominant_motion = motion.get("dominant_motion_ko") or "정지 또는 미미한 움직임"
+    raw_motion, ego_motion, scene_state = describe_motion(row)
     scene_summary, camera_reason = build_camera_thought(pred_label, row)
 
     x0 = 24
@@ -139,7 +142,10 @@ def render_frame(prev_bgr, curr_bgr, next_bgr, row, pred_label, confidence, show
     lines = [
         "sample: {} | bag: {}".format(sample_id, source_bag),
         "student: {} ({:.2f})".format(pred_label, confidence),
-        "motion: {}".format(dominant_motion),
+        "robot motion: {}".format(ego_motion),
+        "scene state: {}".format(scene_state),
+        "raw flow: {}".format(raw_motion),
+        "candidates: {}".format(format_top_candidates(top_candidates)),
         "scene: {}".format(scene_summary),
         "reason: {}".format(camera_reason),
     ]
@@ -229,9 +235,17 @@ def main():
             context_matrix = vectorizer.transform([context_feature]).astype(np.float32)
             x = np.concatenate([image_feature.reshape(1, -1), context_matrix], axis=1)
             probs = model.predict_proba(x)[0]
-            pred_index = int(np.argmax(probs))
+            top_indices = np.argsort(probs)[::-1][: min(3, len(probs))]
+            pred_index = int(top_indices[0])
             pred_label = str(label_encoder.inverse_transform([pred_index])[0])
             confidence = float(probs[pred_index])
+            top_candidates = [
+                {
+                    "label_ko": str(label_encoder.inverse_transform([int(idx)])[0]),
+                    "confidence": float(probs[int(idx)]),
+                }
+                for idx in top_indices
+            ]
 
             frame = render_frame(
                 prev_bgr=prev_bgr,
@@ -241,6 +255,7 @@ def main():
                 pred_label=pred_label,
                 confidence=confidence,
                 show_teacher=bool(args.show_teacher),
+                top_candidates=top_candidates,
             )
             writer.write(frame)
             if args.display_window:

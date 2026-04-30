@@ -76,6 +76,90 @@ def resize_for_flow(image_bgr, max_side):
     return gray
 
 
+def infer_raw_screen_motion_ko(prev_stats, next_stats):
+    direction_ko = "정지 또는 미미한 움직임"
+    dx = 0.5 * (float(prev_stats.get("mean_dx") or 0.0) + float(next_stats.get("mean_dx") or 0.0))
+    dy = 0.5 * (float(prev_stats.get("mean_dy") or 0.0) + float(next_stats.get("mean_dy") or 0.0))
+    center_ratio = max(
+        float(prev_stats.get("center_moving_ratio") or 0.0),
+        float(next_stats.get("center_moving_ratio") or 0.0),
+    )
+    if center_ratio > 0.02:
+        if abs(dx) >= abs(dy):
+            direction_ko = "화면 기준 좌우 방향 움직임"
+            if dx > 0.0:
+                direction_ko = "화면 기준 우측으로 이동하는 움직임"
+            elif dx < 0.0:
+                direction_ko = "화면 기준 좌측으로 이동하는 움직임"
+        else:
+            direction_ko = "화면 기준 상하 방향 움직임"
+            if dy > 0.0:
+                direction_ko = "화면 기준 아래쪽으로 이동하는 움직임"
+            elif dy < 0.0:
+                direction_ko = "화면 기준 위쪽으로 이동하는 움직임"
+    return direction_ko
+
+
+def infer_ego_motion_ko(prev_stats, next_stats):
+    mean_dx = 0.5 * (float(prev_stats.get("mean_dx") or 0.0) + float(next_stats.get("mean_dx") or 0.0))
+    mean_dy = 0.5 * (float(prev_stats.get("mean_dy") or 0.0) + float(next_stats.get("mean_dy") or 0.0))
+    mean_mag = 0.5 * (
+        float(prev_stats.get("mean_magnitude") or 0.0) + float(next_stats.get("mean_magnitude") or 0.0)
+    )
+    center_ratio = max(
+        float(prev_stats.get("center_moving_ratio") or 0.0),
+        float(next_stats.get("center_moving_ratio") or 0.0),
+    )
+    moving_ratio = max(
+        float(prev_stats.get("moving_ratio") or 0.0),
+        float(next_stats.get("moving_ratio") or 0.0),
+    )
+
+    if center_ratio < 0.03 and moving_ratio < 0.10 and mean_mag < 1.0:
+        return "정지"
+
+    dx_threshold = 0.35
+    dy_threshold = 0.35
+
+    if mean_dy >= dy_threshold:
+        if mean_dx >= dx_threshold:
+            return "전진 좌회전"
+        if mean_dx <= -dx_threshold:
+            return "전진 우회전"
+        return "전진"
+
+    if mean_dy <= -dy_threshold:
+        if mean_dx >= dx_threshold:
+            return "후진 좌회전"
+        if mean_dx <= -dx_threshold:
+            return "후진 우회전"
+        return "후진"
+
+    if mean_dx >= dx_threshold:
+        return "좌회전"
+    if mean_dx <= -dx_threshold:
+        return "우회전"
+    return "정지"
+
+
+def infer_scene_state_ko(prev_stats, next_stats, ego_motion_ko):
+    center_ratio = max(
+        float(prev_stats.get("center_moving_ratio") or 0.0),
+        float(next_stats.get("center_moving_ratio") or 0.0),
+    )
+    moving_ratio = max(
+        float(prev_stats.get("moving_ratio") or 0.0),
+        float(next_stats.get("moving_ratio") or 0.0),
+    )
+    if ego_motion_ko == "정지":
+        if center_ratio >= 0.20 or moving_ratio >= 0.25:
+            return "동적 객체 영향 큼"
+        return "정적 구조 우세"
+    if center_ratio >= 0.12 or moving_ratio >= 0.20:
+        return "자차 이동 영향 큼"
+    return "정적/동적 혼합"
+
+
 def summarize_flow(prev_bgr, curr_bgr, next_bgr, max_side, motion_threshold):
     prev_gray = resize_for_flow(prev_bgr, max_side)
     curr_gray = resize_for_flow(curr_bgr, max_side)
@@ -117,34 +201,24 @@ def summarize_flow(prev_bgr, curr_bgr, next_bgr, max_side, motion_threshold):
     prev_stats = _stats(flow_prev)
     next_stats = _stats(flow_next)
 
-    direction_ko = "정지 또는 미미한 움직임"
-    dx = 0.5 * (prev_stats["mean_dx"] + next_stats["mean_dx"])
-    dy = 0.5 * (prev_stats["mean_dy"] + next_stats["mean_dy"])
-    center_ratio = max(prev_stats["center_moving_ratio"], next_stats["center_moving_ratio"])
-    if center_ratio > 0.02:
-        if abs(dx) >= abs(dy):
-            direction_ko = "화면 기준 좌우 방향 움직임"
-            if dx > 0.0:
-                direction_ko = "화면 기준 우측으로 이동하는 움직임"
-            elif dx < 0.0:
-                direction_ko = "화면 기준 좌측으로 이동하는 움직임"
-        else:
-            direction_ko = "화면 기준 상하 방향 움직임"
-            if dy > 0.0:
-                direction_ko = "화면 기준 아래쪽으로 이동하는 움직임"
-            elif dy < 0.0:
-                direction_ko = "화면 기준 위쪽으로 이동하는 움직임"
+    raw_motion_ko = infer_raw_screen_motion_ko(prev_stats, next_stats)
+    ego_motion_ko = infer_ego_motion_ko(prev_stats, next_stats)
+    scene_state_ko = infer_scene_state_ko(prev_stats, next_stats, ego_motion_ko)
 
     return {
         "prev_to_curr": prev_stats,
         "curr_to_next": next_stats,
-        "dominant_motion_ko": direction_ko,
+        "dominant_motion_ko": raw_motion_ko,
+        "raw_screen_motion_ko": raw_motion_ko,
+        "ego_motion_ko": ego_motion_ko,
+        "scene_state_ko": scene_state_ko,
     }
 
 
 def build_camera_only_prompt(sample):
     motion = sample.get("motion_summary") or {}
-    dominant_motion_ko = motion.get("dominant_motion_ko", "정지 또는 미미한 움직임")
+    dominant_motion_ko = motion.get("ego_motion_ko") or motion.get("dominant_motion_ko", "정지")
+    scene_state_ko = motion.get("scene_state_ko", "정적/동적 혼합")
     prev_to_curr = motion.get("prev_to_curr") or {}
     curr_to_next = motion.get("curr_to_next") or {}
 
@@ -160,7 +234,8 @@ def build_camera_only_prompt(sample):
             "3) next",
             "",
             "움직임 요약:",
-            "- dominant_motion_ko: {}".format(dominant_motion_ko),
+            "- ego_motion_ko: {}".format(dominant_motion_ko),
+            "- scene_state_ko: {}".format(scene_state_ko),
             "- prev_to_curr.moving_ratio: {:.4f}".format(float(prev_to_curr.get("moving_ratio") or 0.0)),
             "- prev_to_curr.center_moving_ratio: {:.4f}".format(float(prev_to_curr.get("center_moving_ratio") or 0.0)),
             "- curr_to_next.moving_ratio: {:.4f}".format(float(curr_to_next.get("moving_ratio") or 0.0)),

@@ -57,6 +57,8 @@ def build_context_feature(row):
         "near_raw_centroid_z": float(centroid.get("z") or 0.0),
         "source_bag={}".format(row.get("source_bag_stem") or row.get("source_bag") or "unknown"): 1.0,
         "dominant_motion={}".format(motion.get("dominant_motion_ko") or "unknown"): 1.0,
+        "ego_motion={}".format(motion.get("ego_motion_ko") or "unknown"): 1.0,
+        "scene_state={}".format(motion.get("scene_state_ko") or "unknown"): 1.0,
         "prev_to_curr_mean_magnitude": float(prev_to_curr.get("mean_magnitude") or 0.0),
         "prev_to_curr_moving_ratio": float(prev_to_curr.get("moving_ratio") or 0.0),
         "prev_to_curr_center_moving_ratio": float(prev_to_curr.get("center_moving_ratio") or 0.0),

@@ -16,7 +16,7 @@ from PIL import ImageDraw, ImageFont
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
-from export_camera_only_teacher_dataset import summarize_flow
+from export_camera_only_teacher_dataset import infer_ego_motion_ko, infer_scene_state_ko, summarize_flow
 from student_baseline_common import build_context_feature, load_image_feature_from_bgr
 
 
@@ -73,49 +73,52 @@ def wrap_text(text, width=18):
     return lines
 
 
-def infer_dynamic_from_motion(row):
+def describe_motion(row):
     motion = row.get("motion_summary") or {}
     prev = motion.get("prev_to_curr") or {}
     nxt = motion.get("curr_to_next") or {}
-    center_ratio = max(
-        float(prev.get("center_moving_ratio") or 0.0),
-        float(nxt.get("center_moving_ratio") or 0.0),
-    )
-    if center_ratio >= 0.25:
-        return "dynamic"
-    if center_ratio <= 0.05:
-        return "static"
-    return "unknown"
+    raw_motion = motion.get("raw_screen_motion_ko") or motion.get("dominant_motion_ko") or "정지 또는 미미한 움직임"
+    ego_motion = motion.get("ego_motion_ko") or infer_ego_motion_ko(prev, nxt)
+    scene_state = motion.get("scene_state_ko") or infer_scene_state_ko(prev, nxt, ego_motion)
+    return raw_motion, ego_motion, scene_state
 
 
 def build_camera_thought(pred_label, row):
-    motion = row.get("motion_summary") or {}
-    dominant_motion = motion.get("dominant_motion_ko") or "정지 또는 미미한 움직임"
-    dynamic_state = infer_dynamic_from_motion(row)
+    _, ego_motion, scene_state = describe_motion(row)
 
     if pred_label == "사람":
-        if dynamic_state == "dynamic":
+        if scene_state == "동적 객체 영향 큼":
             reason = "사람 움직임이 보여 감속이나 회피를 준비한다고 본다."
+        elif ego_motion != "정지":
+            reason = "{} 중 사람과의 간격을 확인하며 지나가려 한다고 본다.".format(ego_motion)
         else:
             reason = "사람이 보여 주변을 경계하며 천천히 본다고 해석한다."
     elif pred_label == "자동차":
-        if dynamic_state == "dynamic":
+        if scene_state == "동적 객체 영향 큼":
             reason = "차량 움직임이 보여 간격을 두고 지나가려 한다고 본다."
+        elif ego_motion != "정지":
+            reason = "{} 중 차량과 차선 가장자리를 함께 확인한다고 본다.".format(ego_motion)
         else:
             reason = "차량이 보여 통과 가능 공간을 살핀다고 해석한다."
     elif pred_label == "벽":
-        if dynamic_state == "dynamic":
-            reason = "시점 변화가 커서 통로 구조를 다시 확인한다고 본다."
+        if ego_motion != "정지":
+            reason = "{} 중 통로 구조와 진행 공간을 확인한다고 본다.".format(ego_motion)
         else:
             reason = "정적인 통로 구조가 보여 즉시 회피할 대상은 약하다고 본다."
     else:
         reason = "{}이 보여 보수적으로 진행한다고 해석한다.".format(pred_label)
 
-    scene = "대표 객체 {} / {}".format(pred_label, dominant_motion)
+    scene = "대표 객체 {} / 로봇 {}".format(pred_label, ego_motion)
     return scene, reason
 
 
-def render_panel(curr_bgr, pred_label, confidence, motion_summary, infer_ms, frame_index):
+def format_top_candidates(top_candidates):
+    if not top_candidates:
+        return "후보 없음"
+    return ", ".join("{} {:.2f}".format(item["label_ko"], float(item["confidence"])) for item in top_candidates)
+
+
+def render_panel(curr_bgr, pred_label, confidence, motion_summary, infer_ms, frame_index, top_candidates):
     h, w = curr_bgr.shape[:2]
     panel_w = 460
     canvas = np.zeros((h, w + panel_w, 3), dtype=np.uint8)
@@ -124,8 +127,7 @@ def render_panel(curr_bgr, pred_label, confidence, motion_summary, infer_ms, fra
 
     row = {"motion_summary": motion_summary}
     scene_summary, camera_reason = build_camera_thought(pred_label, row)
-    dominant_motion = motion_summary.get("dominant_motion_ko") or "정지 또는 미미한 움직임"
-    dynamic_state = infer_dynamic_from_motion(row)
+    raw_motion, ego_motion, scene_state = describe_motion(row)
 
     pil = PILImage.fromarray(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(pil)
@@ -141,15 +143,17 @@ def render_panel(curr_bgr, pred_label, confidence, motion_summary, infer_ms, fra
     lines = [
         "frame: {}".format(frame_index),
         "대표 객체: {} ({:.2f})".format(pred_label, confidence),
-        "motion: {}".format(dominant_motion),
-        "dynamic: {}".format(dynamic_state),
+        "robot motion: {}".format(ego_motion),
+        "scene state: {}".format(scene_state),
+        "raw flow: {}".format(raw_motion),
+        "후보: {}".format(format_top_candidates(top_candidates)),
         "scene: {}".format(scene_summary),
         "reason: {}".format(camera_reason),
         "infer: {:.1f} ms".format(infer_ms),
         "q: quit",
     ]
     for idx, line in enumerate(lines):
-        font = body_font if idx < 4 else small_font
+        font = body_font if idx < 5 else small_font
         for subline in wrap_text(line, width=22):
             draw.text((x0, y), subline, fill=(240, 240, 240), font=font)
             y += 28 if font == body_font else 24
@@ -281,18 +285,30 @@ class StudentCameraOnlyNode(object):
         context_matrix = self.vectorizer.transform([context_feature]).astype(np.float32)
         x = np.concatenate([image_feature.reshape(1, -1), context_matrix], axis=1)
         probs = self.model.predict_proba(x)[0]
-        pred_index = int(np.argmax(probs))
+        top_indices = np.argsort(probs)[::-1][: min(3, len(probs))]
+        pred_index = int(top_indices[0])
         pred_label = str(self.label_encoder.inverse_transform([pred_index])[0])
         confidence = float(probs[pred_index])
+        top_candidates = [
+            {
+                "label_ko": str(self.label_encoder.inverse_transform([int(idx)])[0]),
+                "confidence": float(probs[int(idx)]),
+            }
+            for idx in top_indices
+        ]
         infer_ms = (time.perf_counter() - t0) * 1000.0
 
         scene_summary, camera_reason = build_camera_thought(pred_label, row)
+        raw_motion, ego_motion, scene_state = describe_motion(row)
         payload = {
             "frame_index": int(center["frame_index"]),
             "stamp": center["stamp"],
             "primary_object_ko": pred_label,
             "confidence": confidence,
-            "dynamic": infer_dynamic_from_motion(row),
+            "top_candidates": top_candidates,
+            "raw_screen_motion_ko": raw_motion,
+            "ego_motion_ko": ego_motion,
+            "scene_state_ko": scene_state,
             "motion_summary": motion_summary,
             "scene_summary_ko": scene_summary,
             "driving_reason_ko": camera_reason,
@@ -304,7 +320,7 @@ class StudentCameraOnlyNode(object):
             int(center["frame_index"]),
             pred_label,
             confidence,
-            motion_summary.get("dominant_motion_ko") or "정지 또는 미미한 움직임",
+            ego_motion,
             camera_reason,
         )
 
@@ -315,6 +331,7 @@ class StudentCameraOnlyNode(object):
             motion_summary=motion_summary,
             infer_ms=infer_ms,
             frame_index=int(center["frame_index"]),
+            top_candidates=top_candidates,
         )
         overlay_msg = self.bridge.cv2_to_imgmsg(overlay_bgr, encoding="bgr8")
         overlay_msg.header = msg.header
