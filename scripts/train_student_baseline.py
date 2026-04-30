@@ -120,10 +120,12 @@ def main():
     )
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
+    all_labels = list(range(len(label_encoder.classes_)))
 
     report = classification_report(
         y_test,
         y_pred,
+        labels=all_labels,
         target_names=label_encoder.classes_.tolist(),
         zero_division=0,
         output_dict=True,
@@ -131,6 +133,7 @@ def main():
     report_text = classification_report(
         y_test,
         y_pred,
+        labels=all_labels,
         target_names=label_encoder.classes_.tolist(),
         zero_division=0,
     )
