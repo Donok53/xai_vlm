@@ -314,6 +314,8 @@ source /opt/ros/noetic/setup.bash
 /usr/bin/python3 scripts/ros_student_camera_only_node.py _sample_every_n:=8
 ```
 
+기본으로 RViz가 같이 뜨고, `/student_xai/overlay`를 바로 보여준다.
+
 터미널 3:
 
 ```bash

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import subprocess
 import time
 from collections import deque
 from pathlib import Path
@@ -151,7 +152,14 @@ class StudentCameraOnlyNode(object):
         self.sample_every_n = int(rospy.get_param("~sample_every_n", 8))
         self.flow_image_side_px = int(rospy.get_param("~flow_image_side_px", 320))
         self.flow_motion_threshold = float(rospy.get_param("~flow_motion_threshold", 1.5))
-        self.display_window = bool(rospy.get_param("~display_window", True))
+        self.display_window = bool(rospy.get_param("~display_window", False))
+        self.launch_rviz = bool(rospy.get_param("~launch_rviz", True))
+        self.rviz_config_path = Path(
+            rospy.get_param(
+                "~rviz_config_path",
+                str(Path(__file__).resolve().parent.parent / "rviz" / "student_camera_only.rviz"),
+            )
+        ).expanduser().resolve()
 
         bundle = joblib.load(str(self.model_path))
         self.model = bundle["model"]
@@ -162,6 +170,7 @@ class StudentCameraOnlyNode(object):
         self.bridge = CvBridge()
         self.frames = deque(maxlen=3)
         self.frame_index = -1
+        self.rviz_process = None
 
         self.message_pub = rospy.Publisher(self.output_topic, String, queue_size=10)
         self.overlay_pub = rospy.Publisher(self.overlay_topic, Image, queue_size=2)
@@ -174,6 +183,30 @@ class StudentCameraOnlyNode(object):
             self.overlay_topic,
             self.model_path,
         )
+        if self.launch_rviz:
+            self._start_rviz()
+        rospy.on_shutdown(self._on_shutdown)
+
+    def _start_rviz(self):
+        if not self.rviz_config_path.exists():
+            rospy.logwarn("rviz config가 없습니다: %s", self.rviz_config_path)
+            return
+        try:
+            self.rviz_process = subprocess.Popen(
+                ["rviz", "-d", str(self.rviz_config_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            rospy.loginfo("rviz started | config=%s", self.rviz_config_path)
+        except Exception as exc:
+            rospy.logwarn("rviz 실행에 실패했습니다: %s", exc)
+
+    def _on_shutdown(self):
+        if self.rviz_process is not None and self.rviz_process.poll() is None:
+            try:
+                self.rviz_process.terminate()
+            except Exception:
+                pass
 
     def _image_callback(self, msg):
         self.frame_index += 1
