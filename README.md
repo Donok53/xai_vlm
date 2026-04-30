@@ -267,6 +267,34 @@ window로 바로 보고 싶으면:
   --display-window
 ```
 
+## 7. Bag Replay 실시간 추론 보기
+
+학습된 student가 bag를 따라가며 현재 카메라 장면을 어떻게 해석하는지 실시간처럼 보려면:
+
+```bash
+/usr/bin/python3 scripts/replay_student_camera_only_realtime.py \
+  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag \
+  --sample-every-n 8
+```
+
+두 배 빠르게 보고 싶으면:
+
+```bash
+/usr/bin/python3 scripts/replay_student_camera_only_realtime.py \
+  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag \
+  --sample-every-n 8 \
+  --playback-rate 2.0
+```
+
+창은 띄우지 않고 결과만 mp4로 남기려면:
+
+```bash
+/usr/bin/python3 scripts/replay_student_camera_only_realtime.py \
+  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag \
+  --sample-every-n 8 \
+  --no-display-window
+```
+
 출력:
 
 - `student_baseline/student_baseline.joblib`

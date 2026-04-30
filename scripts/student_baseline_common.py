@@ -21,9 +21,20 @@ def load_image_feature(path, image_size):
     image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if image is None:
         return np.zeros((image_size * image_size,), dtype=np.float32)
+    return load_image_feature_from_gray(image, image_size)
+
+
+def load_image_feature_from_gray(image, image_size):
     image = cv2.resize(image, (image_size, image_size), interpolation=cv2.INTER_AREA)
     feature = image.astype(np.float32).reshape(-1) / 255.0
     return feature
+
+
+def load_image_feature_from_bgr(image_bgr, image_size):
+    if image_bgr is None:
+        return np.zeros((image_size * image_size,), dtype=np.float32)
+    image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    return load_image_feature_from_gray(image, image_size)
 
 
 def build_context_feature(row):
