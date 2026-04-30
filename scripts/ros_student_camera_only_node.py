@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import subprocess
+import sys
 import time
 from collections import deque
 from pathlib import Path
@@ -17,6 +18,31 @@ from std_msgs.msg import String
 
 from export_camera_only_teacher_dataset import summarize_flow
 from student_baseline_common import build_context_feature, load_image_feature_from_bgr
+
+
+def _parse_explicit_private_args():
+    explicit = {}
+    for arg in sys.argv[1:]:
+        if not arg.startswith("_") or ":=" not in arg:
+            continue
+        name, value = arg[1:].split(":=", 1)
+        explicit[name] = value
+    return explicit
+
+
+def _coerce_bool(value):
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    return text in ("1", "true", "yes", "on")
+
+
+def get_private_param(name, default, explicit_args):
+    resolved_name = rospy.resolve_name("~" + name)
+    if name in explicit_args:
+        return rospy.get_param(resolved_name, default)
+    rospy.set_param(resolved_name, default)
+    return default
 
 
 def find_font(size):
@@ -134,12 +160,14 @@ def render_panel(curr_bgr, pred_label, confidence, motion_summary, infer_ms, fra
 
 class StudentCameraOnlyNode(object):
     def __init__(self):
-        self.image_topic = rospy.get_param("~image_topic", "/camera/color/image_raw")
-        self.output_topic = rospy.get_param("~output_topic", "/student_xai/camera_reason")
-        self.overlay_topic = rospy.get_param("~overlay_topic", "/student_xai/overlay")
+        explicit_args = _parse_explicit_private_args()
+
+        self.image_topic = get_private_param("image_topic", "/camera/color/image_raw", explicit_args)
+        self.output_topic = get_private_param("output_topic", "/student_xai/camera_reason", explicit_args)
+        self.overlay_topic = get_private_param("overlay_topic", "/student_xai/overlay", explicit_args)
         self.model_path = Path(
-            rospy.get_param(
-                "~model_path",
+            get_private_param(
+                "model_path",
                 str(
                     Path(__file__).resolve().parent.parent
                     / "data"
@@ -147,17 +175,19 @@ class StudentCameraOnlyNode(object):
                     / "student_baseline"
                     / "student_baseline.joblib"
                 ),
+                explicit_args,
             )
         ).expanduser().resolve()
-        self.sample_every_n = int(rospy.get_param("~sample_every_n", 8))
-        self.flow_image_side_px = int(rospy.get_param("~flow_image_side_px", 320))
-        self.flow_motion_threshold = float(rospy.get_param("~flow_motion_threshold", 1.5))
-        self.display_window = bool(rospy.get_param("~display_window", False))
-        self.launch_rviz = bool(rospy.get_param("~launch_rviz", True))
+        self.sample_every_n = int(get_private_param("sample_every_n", 8, explicit_args))
+        self.flow_image_side_px = int(get_private_param("flow_image_side_px", 320, explicit_args))
+        self.flow_motion_threshold = float(get_private_param("flow_motion_threshold", 1.5, explicit_args))
+        self.display_window = _coerce_bool(get_private_param("display_window", False, explicit_args))
+        self.launch_rviz = _coerce_bool(get_private_param("launch_rviz", True, explicit_args))
         self.rviz_config_path = Path(
-            rospy.get_param(
-                "~rviz_config_path",
+            get_private_param(
+                "rviz_config_path",
                 str(Path(__file__).resolve().parent.parent / "rviz" / "student_camera_only.rviz"),
+                explicit_args,
             )
         ).expanduser().resolve()
 
@@ -177,11 +207,13 @@ class StudentCameraOnlyNode(object):
         self.sub = rospy.Subscriber(self.image_topic, Image, self._image_callback, queue_size=1)
 
         rospy.loginfo(
-            "student_camera_only_node started | image=%s output=%s overlay=%s model=%s",
+            "student_camera_only_node started | image=%s output=%s overlay=%s model=%s display_window=%s launch_rviz=%s",
             self.image_topic,
             self.output_topic,
             self.overlay_topic,
             self.model_path,
+            self.display_window,
+            self.launch_rviz,
         )
         if self.launch_rviz:
             self._start_rviz()
