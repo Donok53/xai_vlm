@@ -42,6 +42,9 @@
 xai_autonomy_vlm_teacher_distill/
 ├── README.md
 ├── requirements.txt
+├── models/
+│   └── record_real_rich_domain_full/
+│       └── student_baseline.joblib
 ├── data/
 │   └── .gitkeep
 └── scripts/
@@ -342,6 +345,17 @@ rosbag play --clock /home/byeongjae/bagfiles/1.made_map/camera_left.bag
 
 - `student_baseline/student_baseline.joblib`
 - `student_baseline/metrics.json`
+
+## 추론용 배포 모델
+
+학습 데이터셋 전체(`data/...`)는 git에 올리지 않지만,
+바로 추론할 수 있도록 배포용 모델은 `models/` 아래에 둔다.
+
+- 기본 rich 추론 노드:
+  - `models/record_real_rich_domain_full/student_baseline.joblib`
+
+즉 새 환경에서는 `git clone` 후 이 모델이 같이 내려오므로,
+`ros_student_xai_rich_node.py`는 추가 복사 없이 바로 실행된다.
 
 ## 의도한 다음 단계
 
