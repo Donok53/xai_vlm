@@ -268,7 +268,33 @@ def format_top_candidates(top_candidates):
     return ", ".join("{} {:.2f}".format(item["label_ko"], float(item["confidence"])) for item in top_candidates)
 
 
-def render_panel(curr_bgr, pred_label, confidence, event_label, scene_summary, reason, infer_ms, top_candidates, row):
+def driving_mode_color(mode):
+    mapping = {
+        "목적지 도착": (70, 180, 220),
+        "경로 차단": (220, 70, 70),
+        "좌측 회피": (245, 166, 35),
+        "우측 회피": (245, 166, 35),
+        "회피 주행": (245, 166, 35),
+        "실제 정지": (210, 190, 60),
+        "정상 경로": (80, 170, 95),
+    }
+    return mapping.get(mode, (110, 110, 110))
+
+
+def driving_mode_family(mode):
+    text = str(mode or "")
+    if "회피" in text:
+        return "avoid"
+    if "차단" in text:
+        return "blocked"
+    if "도착" in text:
+        return "arrival"
+    if "실제 정지" in text:
+        return "actual_stop"
+    return "normal"
+
+
+def render_panel(curr_bgr, pred_label, confidence, event_label, scene_summary, reason, infer_ms, top_candidates, row, summary_payload):
     h, w = curr_bgr.shape[:2]
     panel_w = 520
     canvas = np.zeros((h, w + panel_w, 3), dtype=np.uint8)
@@ -286,15 +312,35 @@ def render_panel(curr_bgr, pred_label, confidence, event_label, scene_summary, r
     title_font = find_font(28)
     body_font = find_font(22)
     small_font = find_font(18)
+    headline_font = find_font(30)
+    reason_font = find_font(24)
 
     x0 = w + 20
     y = 24
     draw.text((x0, y), "student xai thought", fill=(255, 255, 255), font=title_font)
     y += 46
 
+    driving_mode = str(summary_payload.get("driving_mode_ko") or "unknown")
+    badge_rgb = driving_mode_color(driving_mode)
+    badge_h = 42
+    draw.rounded_rectangle((x0, y, x0 + 220, y + badge_h), radius=10, fill=badge_rgb)
+    draw.text((x0 + 12, y + 6), driving_mode, fill=(15, 15, 15), font=body_font)
+    y += badge_h + 16
+
+    draw.text((x0, y), "latest reason", fill=(255, 255, 255), font=small_font)
+    y += 24
+    for line in wrap_text(reason, width=22):
+        draw.text((x0, y), line, fill=(255, 245, 210), font=reason_font)
+        y += 32
+    y += 8
+
+    draw.text((x0, y), "scene: {}".format(scene_summary), fill=(220, 220, 220), font=body_font)
+    y += 34
+
     lines = [
         "event: {}".format(event_label),
         "대표 객체: {} ({:.2f})".format(pred_label, confidence),
+        "장애물 해석: {}".format(summary_payload.get("obstacle_label_ko") or pred_label),
         "cmd motion: {}".format(control.get("motion_state") or "unknown"),
         "actual motion: {}".format(actual_motion.get("motion_ko") or "unknown"),
         "steer: {}".format(control.get("steering_direction") or "unknown"),
@@ -302,14 +348,12 @@ def render_panel(curr_bgr, pred_label, confidence, event_label, scene_summary, r
         "actual speed: {:.2f} m/s".format(float(actual_motion.get("linear_speed_mps") or 0.0)),
         "near_range: {}".format("n/a" if near_range is None else "{:.2f} m".format(float(near_range))),
         "후보: {}".format(format_top_candidates(top_candidates)),
-        "scene: {}".format(scene_summary),
-        "reason: {}".format(reason),
         "planner: {}".format(planning.get("behavior_reason") or row.get("planner_reason") or "unknown"),
         "infer: {:.1f} ms".format(infer_ms),
         "q: quit",
     ]
     for idx, line in enumerate(lines):
-        font = body_font if idx < 5 else small_font
+        font = body_font if idx < 4 else small_font
         for subline in wrap_text(line, width=26):
             draw.text((x0, y), subline, fill=(240, 240, 240), font=font)
             y += 28 if font == body_font else 24
@@ -364,6 +408,9 @@ class StudentXAIRichNode(object):
         self.latest_cloud = None
         self.overlay_bgr = None
         self.frame_index = -1
+        self.current_summary_payload = None
+        self.current_summary_key = None
+        self.last_logged_key = None
 
         self.message_pub = rospy.Publisher(self.output_topic, String, queue_size=20)
         self.overlay_pub = rospy.Publisher(self.overlay_topic, Image, queue_size=2)
@@ -499,6 +546,36 @@ class StudentXAIRichNode(object):
         infer_ms = (time.perf_counter() - t0) * 1000.0
 
         scene_summary, reason, aux = infer_driving_message(pred_label, row, actual_motion)
+        current_summary_key = (
+            str(aux.get("driving_mode") or ""),
+            str(scene_summary or ""),
+            str(reason or ""),
+            str(aux.get("obstacle_label") or ""),
+        )
+        new_summary_payload = {
+            "driving_mode_ko": aux.get("driving_mode"),
+            "scene_summary_ko": scene_summary,
+            "driving_reason_ko": reason,
+            "obstacle_label_ko": aux.get("obstacle_label"),
+            "updated_event_label": row["event_label"],
+        }
+        current_family = driving_mode_family(aux.get("driving_mode"))
+        previous_family = driving_mode_family(
+            None if self.current_summary_payload is None else self.current_summary_payload.get("driving_mode_ko")
+        )
+
+        should_refresh_summary = False
+        if self.current_summary_payload is None:
+            should_refresh_summary = True
+        elif current_family != previous_family:
+            should_refresh_summary = True
+        elif current_family in ("avoid", "blocked", "arrival", "actual_stop") and current_summary_key != self.current_summary_key:
+            should_refresh_summary = True
+
+        if should_refresh_summary:
+            self.current_summary_key = current_summary_key
+            self.current_summary_payload = new_summary_payload
+
         payload = {
             "frame_index": int(center["frame_index"]),
             "stamp": center["stamp"],
@@ -515,31 +592,35 @@ class StudentXAIRichNode(object):
             "driving_mode_ko": aux["driving_mode"],
             "obstacle_label_ko": aux["obstacle_label"],
             "command_actual_mismatch": aux["command_actual_mismatch"],
-            "scene_summary_ko": scene_summary,
-            "driving_reason_ko": reason,
+            "scene_summary_ko": self.current_summary_payload["scene_summary_ko"],
+            "driving_reason_ko": self.current_summary_payload["driving_reason_ko"],
             "infer_ms": infer_ms,
         }
         self.message_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
-        rospy.loginfo(
-            "[STUDENT-XAI-RICH] frame=%d | event=%s | object=%s | confidence=%.2f | scene=%s | final=%s",
-            int(center["frame_index"]),
-            row["event_label"],
-            pred_label,
-            confidence,
-            scene_summary,
-            reason,
-        )
+        if self.current_summary_key != self.last_logged_key:
+            self.last_logged_key = self.current_summary_key
+            rospy.loginfo(
+                "[STUDENT-XAI-RICH] frame=%d | event=%s | mode=%s | object=%s | confidence=%.2f | scene=%s | final=%s",
+                int(center["frame_index"]),
+                row["event_label"],
+                self.current_summary_payload["driving_mode_ko"],
+                pred_label,
+                confidence,
+                self.current_summary_payload["scene_summary_ko"],
+                self.current_summary_payload["driving_reason_ko"],
+            )
 
         self.overlay_bgr = render_panel(
             curr_bgr=curr_bgr,
             pred_label=pred_label,
             confidence=confidence,
             event_label=row["event_label"],
-            scene_summary=scene_summary,
-            reason=reason,
+            scene_summary=self.current_summary_payload["scene_summary_ko"],
+            reason=self.current_summary_payload["driving_reason_ko"],
             infer_ms=infer_ms,
             top_candidates=top_candidates,
             row=row,
+            summary_payload=self.current_summary_payload,
         )
         overlay_msg = self.bridge.cv2_to_imgmsg(self.overlay_bgr, encoding="bgr8")
         overlay_msg.header = center["header"]

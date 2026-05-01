@@ -50,6 +50,7 @@ def build_context_feature(row):
         "event_label={}".format(row.get("event_label") or "unknown"): 1.0,
         "motion_state={}".format(row.get("motion_state") or "unknown"): 1.0,
         "planner_reason={}".format(row.get("planner_reason") or "unknown"): 1.0,
+        "scene_domain={}".format(row.get("scene_domain_ko") or "불명"): 1.0,
         "path_blocked": float(bool(row.get("path_blocked"))),
         "near_raw_points": float(obstacle.get("near_raw_points") or 0.0),
         "near_raw_min_range_m": float(obstacle.get("near_raw_min_range_m") or 0.0),

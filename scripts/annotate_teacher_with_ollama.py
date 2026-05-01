@@ -34,6 +34,53 @@ ALLOWED_LABELS_KO = [
     "와인잔",
     "책",
     "시계",
+    "로봇",
+    "쓰레기통",
+    "나무",
+    "안전봉",
+    "문",
+    "벽",
+]
+
+INDOOR_LABELS_KO = [
+    "사람",
+    "우산",
+    "가방",
+    "손가방",
+    "캐리어",
+    "병",
+    "컵",
+    "책",
+    "시계",
+    "벤치",
+    "로봇",
+    "쓰레기통",
+    "문",
+    "벽",
+]
+
+OUTDOOR_LABELS_KO = [
+    "사람",
+    "자전거",
+    "자동차",
+    "오토바이",
+    "기차",
+    "트럭",
+    "신호등",
+    "소화전",
+    "정지 표지판",
+    "주차 미터기",
+    "벤치",
+    "고양이",
+    "개",
+    "가방",
+    "우산",
+    "손가방",
+    "캐리어",
+    "병",
+    "컵",
+    "나무",
+    "안전봉",
     "벽",
 ]
 
@@ -145,9 +192,12 @@ def build_class_only_prompt(row):
             ", ".join(ALLOWED_LABELS_KO),
             "",
             "규칙:",
+            "- 먼저 장면을 실내, 실외, 불명 중 하나로 판단한다.",
+            "- 실내 후보: {}".format(", ".join(INDOOR_LABELS_KO)),
+            "- 실외 후보: {}".format(", ".join(OUTDOOR_LABELS_KO)),
             "- 설명 문장은 쓰지 마라.",
             "- 반드시 JSON만 출력하라.",
-            '- 형식: {"primary_object_ko":"허용라벨중하나","confidence":0.0}',
+            '- 형식: {"scene_domain_ko":"실내|실외|불명","primary_object_ko":"허용라벨중하나","confidence":0.0}',
         ]
     )
 
@@ -163,10 +213,13 @@ def choose_prompt(row, prompt_mode):
                 "",
                 "추가 규칙:",
                 "- 코드펜스(````json`)를 절대 쓰지 마라.",
+                "- 먼저 장면을 실내, 실외, 불명 중 하나로 분류한다.",
+                "- 실내 후보: {}".format(", ".join(INDOOR_LABELS_KO)),
+                "- 실외 후보: {}".format(", ".join(OUTDOOR_LABELS_KO)),
                 "- scene_summary_ko는 12자 이하의 아주 짧은 구문으로 쓴다.",
                 "- driving_reason_ko는 18자 이하의 아주 짧은 구문으로 쓴다.",
                 "- 반드시 한 줄 JSON 객체 하나만 출력한다.",
-                '- 출력 형식: {"primary_object_ko":"","dynamic":"static|dynamic|unknown","scene_summary_ko":"","driving_reason_ko":"","confidence":0.0}',
+                '- 출력 형식: {"scene_domain_ko":"실내|실외|불명","primary_object_ko":"","dynamic":"static|dynamic|unknown","scene_summary_ko":"","driving_reason_ko":"","confidence":0.0}',
             ]
         )
         return compact
@@ -178,11 +231,14 @@ def choose_prompt(row, prompt_mode):
                 "",
                 "추가 규칙:",
                 "- 코드펜스(````json`)를 절대 쓰지 마라.",
+                "- 먼저 장면을 실내, 실외, 불명 중 하나로 분류한다.",
+                "- 실내 후보: {}".format(", ".join(INDOOR_LABELS_KO)),
+                "- 실외 후보: {}".format(", ".join(OUTDOOR_LABELS_KO)),
                 "- scene_summary_ko는 16자 이하의 아주 짧은 구문으로 쓴다.",
                 "- driving_reason_ko는 24자 이하의 아주 짧은 구문으로 쓴다.",
                 "- planner_reason 문장을 그대로 복사하지 말고, 카메라와 장애물 위치를 근거로 다시 말하라.",
                 "- 반드시 한 줄 JSON 객체 하나만 출력한다.",
-                '- 출력 형식: {"primary_object_ko":"","dynamic":"static|dynamic|unknown","scene_summary_ko":"","driving_reason_ko":"","confidence":0.0}',
+                '- 출력 형식: {"scene_domain_ko":"실내|실외|불명","primary_object_ko":"","dynamic":"static|dynamic|unknown","scene_summary_ko":"","driving_reason_ko":"","confidence":0.0}',
             ]
         )
         return compact

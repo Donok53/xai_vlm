@@ -29,6 +29,11 @@ ALLOWED_LABELS_KO = [
     "공",
     "개",
     "책",
+    "로봇",
+    "쓰레기통",
+    "나무",
+    "안전봉",
+    "문",
     "벽",
 ]
 
@@ -56,6 +61,14 @@ EN_TO_KO = {
     "wine glass": "와인잔",
     "book": "책",
     "clock": "시계",
+    "robot": "로봇",
+    "trash can": "쓰레기통",
+    "garbage can": "쓰레기통",
+    "bin": "쓰레기통",
+    "tree": "나무",
+    "traffic cone": "안전봉",
+    "bollard": "안전봉",
+    "door": "문",
     "wall": "벽",
 }
 
@@ -165,6 +178,7 @@ def main():
                 "teacher_prompt_camera_only_ko": meta.get("teacher_prompt_camera_only_ko"),
                 "teacher_output_raw": ann.get("teacher_output_raw"),
                 "teacher_output_json": ann.get("teacher_output_json"),
+                "scene_domain_ko": str((ann.get("teacher_output_json") or {}).get("scene_domain_ko") or "불명"),
                 "label_ko_raw": label_ko,
                 "label_source": source,
             }
