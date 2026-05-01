@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument("--model", default="qwen2.5vl:32b-q4_K_M")
     parser.add_argument(
         "--prompt-mode",
-        choices=["metadata", "class_only", "camera_reason_temporal"],
+        choices=["metadata", "class_only", "camera_reason_temporal", "xai_reason_temporal"],
         default="class_only",
     )
     parser.add_argument("--limit", type=int, default=0)
@@ -170,11 +170,27 @@ def choose_prompt(row, prompt_mode):
             ]
         )
         return compact
+    if prompt_mode == "xai_reason_temporal":
+        base = str(row.get("teacher_prompt_ko") or "")
+        compact = "\n".join(
+            [
+                base,
+                "",
+                "추가 규칙:",
+                "- 코드펜스(````json`)를 절대 쓰지 마라.",
+                "- scene_summary_ko는 16자 이하의 아주 짧은 구문으로 쓴다.",
+                "- driving_reason_ko는 24자 이하의 아주 짧은 구문으로 쓴다.",
+                "- planner_reason 문장을 그대로 복사하지 말고, 카메라와 장애물 위치를 근거로 다시 말하라.",
+                "- 반드시 한 줄 JSON 객체 하나만 출력한다.",
+                '- 출력 형식: {"primary_object_ko":"","dynamic":"static|dynamic|unknown","scene_summary_ko":"","driving_reason_ko":"","confidence":0.0}',
+            ]
+        )
+        return compact
     return build_class_only_prompt(row)
 
 
 def choose_image_paths(dataset_dir, row, prompt_mode):
-    if prompt_mode == "camera_reason_temporal":
+    if prompt_mode in ("camera_reason_temporal", "xai_reason_temporal"):
         rel_paths = row.get("temporal_image_paths") or []
         if rel_paths:
             return [dataset_dir / str(path) for path in rel_paths]

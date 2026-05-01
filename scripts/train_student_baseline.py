@@ -64,12 +64,18 @@ def main():
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(labels)
 
+    num_rows = len(rows)
+    num_classes = len(set(y.tolist()))
+    effective_test_size = float(args.test_size)
+    if num_rows > 1 and int(np.ceil(effective_test_size * num_rows)) < max(1, num_classes):
+        effective_test_size = min(0.5, float(max(1, num_classes)) / float(num_rows))
+
     stratify = y if len(set(y.tolist())) > 1 and min(np.bincount(y)) >= 2 else None
     X_train, X_test, y_train, y_test, ids_train, ids_test = train_test_split(
         X,
         y,
         sample_ids,
-        test_size=float(args.test_size),
+        test_size=effective_test_size,
         random_state=int(args.random_state),
         stratify=stratify,
     )
@@ -118,6 +124,7 @@ def main():
                 "num_rows": len(rows),
                 "num_train": len(ids_train),
                 "num_test": len(ids_test),
+                "effective_test_size": effective_test_size,
                 "classes": label_encoder.classes_.tolist(),
                 "report": report,
                 "test_sample_ids": ids_test,

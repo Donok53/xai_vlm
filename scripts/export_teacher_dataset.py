@@ -2,7 +2,7 @@
 import argparse
 import json
 import math
-import os
+from collections import deque
 from pathlib import Path
 
 import cv2
@@ -10,6 +10,8 @@ import numpy as np
 import rosbag
 import sensor_msgs.point_cloud2 as point_cloud2
 from cv_bridge import CvBridge
+
+from export_camera_only_teacher_dataset import summarize_flow
 
 
 ALLOWED_LABELS_KO = [
@@ -53,11 +55,14 @@ def parse_args():
         "--point-cloud-topic",
         default="/planning/linefit_ground/non_ground_cloud",
     )
+    parser.add_argument("--cmd-vel-topic", default="/cmd_vel")
     parser.add_argument("--max-image-age-s", type=float, default=0.25)
     parser.add_argument("--max-planner-age-s", type=float, default=0.75)
     parser.add_argument("--max-pointcloud-age-s", type=float, default=0.40)
     parser.add_argument("--max-pointcloud-points", type=int, default=2500)
     parser.add_argument("--jpeg-quality", type=int, default=92)
+    parser.add_argument("--flow-image-side-px", type=int, default=320)
+    parser.add_argument("--flow-motion-threshold", type=float, default=1.5)
     parser.add_argument("--limit", type=int, default=0)
     return parser.parse_args()
 
@@ -140,43 +145,100 @@ def motion_state(planner_snapshot, event_data):
     return "unknown"
 
 
+def control_summary(planner_snapshot, event_data):
+    control = ((event_data or {}).get("control") or {})
+    if not control:
+        control = ((planner_snapshot or {}).get("control") or {})
+    return {
+        "linear_x_mps": float(control.get("linear_x_mps") or 0.0),
+        "angular_z_radps": float(control.get("angular_z_radps") or 0.0),
+        "motion_state": str(control.get("motion_state") or "unknown"),
+        "steering_direction": str(control.get("steering_direction") or "unknown"),
+        "received": bool(control.get("received")),
+        "topic": str(control.get("topic") or "/cmd_vel"),
+    }
+
+
+def planning_summary(planner_snapshot, event_data):
+    source = event_data or {}
+    planning = source.get("planning") or {}
+    decision = source.get("decision") or {}
+    if not planning and planner_snapshot:
+        planning = (planner_snapshot.get("planning") or {})
+        decision = (planner_snapshot.get("decision") or decision)
+
+    path_change = planning.get("path_change") or {}
+    latest = path_change.get("latest") or {}
+    global_path = planning.get("global_path") or {}
+    behavior = decision.get("behavior") or {}
+    path_blocked = (decision.get("path_blocked") or {}).get("value")
+
+    return {
+        "behavior_reason": str(behavior.get("reason") or "unknown"),
+        "behavior_stop": bool(behavior.get("stop")),
+        "speed_limit_mps": float(behavior.get("speed_limit_mps") or 0.0),
+        "path_blocked": bool(path_blocked),
+        "path_change_seq": int(path_change.get("seq") or 0),
+        "path_change_changed": bool(latest.get("changed")),
+        "path_change_direction": str(latest.get("direction") or "unknown"),
+        "path_change_lateral_shift_m": float(latest.get("lateral_shift_m") or 0.0),
+        "global_path_length_m": float(global_path.get("length_m") or 0.0),
+        "global_path_points": int(global_path.get("points") or 0),
+    }
+
+
 def build_teacher_prompt(sample):
     event_label = sample.get("event_label", "unknown")
     planner_reason_text = sample.get("planner_reason", "unknown")
     motion_state_text = sample.get("motion_state", "unknown")
     obstacle = sample.get("obstacle_summary") or {}
+    control = sample.get("control_summary") or {}
+    planning = sample.get("planning_summary") or {}
+    motion = sample.get("motion_summary") or {}
     near_range = obstacle.get("near_raw_min_range_m")
     near_centroid = obstacle.get("near_raw_centroid_xyz") or {}
     near_centroid_text = json.dumps(near_centroid, ensure_ascii=False)
 
     prompt_lines = [
         "너는 자율주행 XAI teacher 모델이다.",
-        "목표는 planner/LiDAR 맥락과 가장 관련 있는 대표 시각 객체를 1개 고르는 것이다.",
-        "설명은 보이는 것만 기준으로 하고, planner의 판단 이유를 그대로 복사하지 마라.",
+        "세 장의 연속 카메라 프레임(prev, current, next)과 planner/LiDAR/cmd_vel 문맥을 함께 보고, 현재 장면에서 왜 그런 주행 판단이 나왔는지 설명하라.",
+        "목표는 planner/LiDAR 맥락과 가장 관련 있는 대표 시각 객체를 1개 고르고, 현재 주행 판단의 시각적 이유를 짧게 정리하는 것이다.",
+        "설명은 카메라에 실제로 보이는 것과 제공된 planner/LiDAR/cmd_vel 문맥을 함께 사용하되, planner의 reason 문장을 그대로 복사하지 마라.",
         "",
         "주행 문맥:",
         "- event_label: {}".format(event_label),
         "- planner_reason: {}".format(planner_reason_text),
         "- motion_state: {}".format(motion_state_text),
+        "- cmd_vel.linear_x_mps: {:.3f}".format(float(control.get("linear_x_mps") or 0.0)),
+        "- cmd_vel.angular_z_radps: {:.3f}".format(float(control.get("angular_z_radps") or 0.0)),
+        "- steering_direction: {}".format(control.get("steering_direction") or "unknown"),
+        "- path_blocked: {}".format(bool(planning.get("path_blocked"))),
+        "- path_change_changed: {}".format(bool(planning.get("path_change_changed"))),
+        "- path_change_direction: {}".format(planning.get("path_change_direction") or "unknown"),
+        "- path_change_lateral_shift_m: {:.3f}".format(float(planning.get("path_change_lateral_shift_m") or 0.0)),
+        "- global_path_length_m: {:.3f}".format(float(planning.get("global_path_length_m") or 0.0)),
+        "- global_path_points: {}".format(int(planning.get("global_path_points") or 0)),
         "- near_raw_min_range_m: {}".format(near_range),
         "- near_raw_centroid_xyz: {}".format(near_centroid_text),
+        "- camera_motion_ego: {}".format(motion.get("ego_motion_ko") or "정지"),
+        "- camera_motion_scene_state: {}".format(motion.get("scene_state_ko") or "정적/동적 혼합"),
         "",
         "허용 라벨 후보:",
         "- {}".format(", ".join(ALLOWED_LABELS_KO)),
         "",
         "규칙:",
         "- 허용 라벨에 없으면 primary_object_ko는 반드시 '벽'으로 답한다.",
-        "- camera image에서 가장 관련 있는 대표 객체 1개만 고른다.",
+        "- current 이미지에서 가장 관련 있는 대표 객체 1개만 고른다.",
+        "- driving_reason_ko는 왜 감속/조향/우회/정지/직진 같은 주행이 나왔는지 짧게 설명한다.",
         "- dynamic은 static, dynamic, unknown 중 하나로 답한다.",
         "- 반드시 JSON만 출력한다.",
         "",
         "출력 형식:",
         '{'
         '"primary_object_ko":"",'
-        '"primary_object_en":"",'
         '"dynamic":"static|dynamic|unknown",'
         '"scene_summary_ko":"",'
-        '"reasoning_link_ko":"",'
+        '"driving_reason_ko":"",'
         '"confidence":0.0'
         '}',
     ]
@@ -199,6 +261,7 @@ def main():
 
     bridge = CvBridge()
     latest_image = None
+    recent_images = deque(maxlen=3)
     latest_planner = None
     latest_cloud = None
     exported = 0
@@ -212,6 +275,7 @@ def main():
                 args.planner_topic,
                 args.event_topic,
                 args.point_cloud_topic,
+                args.cmd_vel_topic,
             ]
         ):
             if topic == args.image_topic:
@@ -219,6 +283,7 @@ def main():
                     "stamp": float(msg.header.stamp.to_sec()),
                     "msg": msg,
                 }
+                recent_images.append(latest_image)
                 continue
 
             if topic == args.planner_topic:
@@ -235,6 +300,10 @@ def main():
                     "frame_id": str(msg.header.frame_id or ""),
                     "msg": msg,
                 }
+                continue
+
+            if topic == args.cmd_vel_topic:
+                # planner/event_log already mirrors cmd_vel semantics, so no-op here for now.
                 continue
 
             if topic != args.event_topic:
@@ -259,11 +328,28 @@ def main():
             )
 
             sample_id = "sample_{:05d}".format(exported)
-            image_path = output_dir / "images" / "{}.jpg".format(sample_id)
-            cv2.imwrite(
-                str(image_path),
-                image_bgr,
-                [int(cv2.IMWRITE_JPEG_QUALITY), int(args.jpeg_quality)],
+            image_rel_paths = []
+            if len(recent_images) >= 3:
+                triplet = [recent_images[0], recent_images[1], recent_images[2]]
+            else:
+                triplet = [latest_image, latest_image, latest_image]
+            for suffix, image_item in zip(["prev", "current", "next"], triplet):
+                rel_path = Path("images") / "{}_{}.jpg".format(sample_id, suffix)
+                abs_path = output_dir / rel_path
+                image_item_bgr = bridge.imgmsg_to_cv2(image_item["msg"], desired_encoding="bgr8")
+                cv2.imwrite(
+                    str(abs_path),
+                    image_item_bgr,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), int(args.jpeg_quality)],
+                )
+                image_rel_paths.append(str(rel_path))
+
+            motion_summary = summarize_flow(
+                bridge.imgmsg_to_cv2(triplet[0]["msg"], desired_encoding="bgr8"),
+                bridge.imgmsg_to_cv2(triplet[1]["msg"], desired_encoding="bgr8"),
+                bridge.imgmsg_to_cv2(triplet[2]["msg"], desired_encoding="bgr8"),
+                args.flow_image_side_px,
+                args.flow_motion_threshold,
             )
 
             pointcloud_relpath = None
@@ -293,10 +379,14 @@ def main():
                 "planner_reason": planner_reason(planner_snapshot, event_data),
                 "motion_state": motion_state(planner_snapshot, event_data),
                 "path_blocked": bool((((event_data.get("decision") or {}).get("path_blocked") or {}).get("value"))),
-                "image_path": str(image_path.relative_to(output_dir)),
+                "image_path": image_rel_paths[1],
+                "temporal_image_paths": image_rel_paths,
+                "motion_summary": motion_summary,
                 "pointcloud_path": pointcloud_relpath,
                 "pointcloud_summary": pointcloud_summary,
                 "obstacle_summary": obstacle_summary(event_data),
+                "control_summary": control_summary(planner_snapshot, event_data),
+                "planning_summary": planning_summary(planner_snapshot, event_data),
                 "teacher_label_candidates_ko": list(ALLOWED_LABELS_KO),
                 "planner_snapshot": planner_snapshot,
                 "event_log": event_data,
