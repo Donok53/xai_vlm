@@ -323,7 +323,11 @@ def render_panel(curr_bgr, pred_label, confidence, event_label, scene_summary, r
     driving_mode = str(summary_payload.get("driving_mode_ko") or "unknown")
     badge_rgb = driving_mode_color(driving_mode)
     badge_h = 42
-    draw.rounded_rectangle((x0, y, x0 + 220, y + badge_h), radius=10, fill=badge_rgb)
+    badge_box = (x0, y, x0 + 220, y + badge_h)
+    if hasattr(draw, "rounded_rectangle"):
+        draw.rounded_rectangle(badge_box, radius=10, fill=badge_rgb)
+    else:
+        draw.rectangle(badge_box, fill=badge_rgb)
     draw.text((x0 + 12, y + 6), driving_mode, fill=(15, 15, 15), font=body_font)
     y += badge_h + 16
 
