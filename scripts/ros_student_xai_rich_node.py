@@ -381,7 +381,7 @@ class StudentXAIRichNode(object):
                 str(
                     Path(__file__).resolve().parent.parent
                     / "data"
-                    / "record_real_rich_full"
+                    / "record_real_rich_domain_full"
                     / "student_baseline"
                     / "student_baseline.joblib"
                 ),

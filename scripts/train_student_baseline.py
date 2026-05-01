@@ -24,6 +24,7 @@ def parse_args():
     parser.add_argument("--image-size", type=int, default=48)
     parser.add_argument("--test-size", type=float, default=0.2)
     parser.add_argument("--random-state", type=int, default=42)
+    parser.add_argument("--max-iter", type=int, default=10000)
     return parser.parse_args()
 def main():
     args = parse_args()
@@ -81,7 +82,7 @@ def main():
     )
 
     model = LogisticRegression(
-        max_iter=3000,
+        max_iter=int(args.max_iter),
         class_weight="balanced",
         multi_class="auto",
     )
