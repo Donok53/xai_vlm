@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import math
 import sys
 import time
 from collections import deque
@@ -12,6 +13,7 @@ import rospy
 from cv_bridge import CvBridge
 from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFont
+from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image, PointCloud2
 from std_msgs.msg import String
 
@@ -81,7 +83,90 @@ def wrap_text(text, width=24):
     return lines
 
 
-def infer_scene_and_reason(pred_label, row):
+def quaternion_to_yaw(quat):
+    x = float(getattr(quat, "x", 0.0))
+    y = float(getattr(quat, "y", 0.0))
+    z = float(getattr(quat, "z", 0.0))
+    w = float(getattr(quat, "w", 1.0))
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def normalize_angle(angle):
+    while angle > math.pi:
+        angle -= 2.0 * math.pi
+    while angle < -math.pi:
+        angle += 2.0 * math.pi
+    return angle
+
+
+def summarize_actual_motion(odom_window):
+    if len(odom_window) < 2:
+        return {
+            "received": False,
+            "linear_speed_mps": 0.0,
+            "yaw_rate_radps": 0.0,
+            "motion_state": "unknown",
+            "motion_ko": "실제 이동 정보 없음",
+        }
+
+    first = odom_window[0]
+    last = odom_window[-1]
+    dt = max(1e-3, float(last["stamp"]) - float(first["stamp"]))
+    dx = float(last["x"]) - float(first["x"])
+    dy = float(last["y"]) - float(first["y"])
+    distance = math.hypot(dx, dy)
+    linear_speed = distance / dt
+    dyaw = normalize_angle(float(last["yaw"]) - float(first["yaw"]))
+    yaw_rate = dyaw / dt
+
+    abs_yaw_rate = abs(yaw_rate)
+    if linear_speed < 0.008 and abs_yaw_rate < 0.03:
+        motion_state = "stopped"
+        motion_ko = "정지"
+    elif linear_speed < 0.008 and abs_yaw_rate >= 0.03:
+        motion_state = "in_place_left" if yaw_rate > 0.0 else "in_place_right"
+        motion_ko = "제자리 좌회전" if yaw_rate > 0.0 else "제자리 우회전"
+    else:
+        if abs_yaw_rate < 0.06:
+            motion_state = "forward_straight"
+            motion_ko = "전진"
+        elif yaw_rate > 0.0:
+            motion_state = "forward_left"
+            motion_ko = "전진 좌회전"
+        else:
+            motion_state = "forward_right"
+            motion_ko = "전진 우회전"
+
+    return {
+        "received": True,
+        "linear_speed_mps": linear_speed,
+        "yaw_rate_radps": yaw_rate,
+        "motion_state": motion_state,
+        "motion_ko": motion_ko,
+    }
+
+
+def canonical_obstacle_label(pred_label):
+    text = str(pred_label or "").strip()
+    if not text or text == "벽":
+        return "장애물"
+    return text
+
+
+def choose_josa(word, with_batchim, without_batchim):
+    text = str(word or "").strip()
+    if not text:
+        return without_batchim
+    last = ord(text[-1])
+    if 0xAC00 <= last <= 0xD7A3:
+        has_batchim = ((last - 0xAC00) % 28) != 0
+        return with_batchim if has_batchim else without_batchim
+    return without_batchim
+
+
+def infer_driving_message(pred_label, row, actual_motion):
     obstacle = row.get("obstacle_summary") or {}
     planning = row.get("planning_summary") or {}
     control = row.get("control_summary") or {}
@@ -99,39 +184,81 @@ def infer_scene_and_reason(pred_label, row):
     path_blocked = bool(planning.get("path_blocked"))
     path_change_changed = bool(planning.get("path_change_changed"))
     path_change_direction = str(planning.get("path_change_direction") or "unknown")
+    path_change_lateral_shift_m = float(planning.get("path_change_lateral_shift_m") or 0.0)
     behavior_reason = str(planning.get("behavior_reason") or row.get("planner_reason") or "unknown")
+    global_path_length_m = float(planning.get("global_path_length_m") or 0.0)
+    global_path_points = int(planning.get("global_path_points") or 0)
+    cmd_linear = float(control.get("linear_x_mps") or 0.0)
+    cmd_angular = float(control.get("angular_z_radps") or 0.0)
+    actual_motion_ko = str(actual_motion.get("motion_ko") or "실제 이동 정보 없음")
+    actual_speed = float(actual_motion.get("linear_speed_mps") or 0.0)
+    actual_yaw_rate = float(actual_motion.get("yaw_rate_radps") or 0.0)
+    actual_motion_received = bool(actual_motion.get("received"))
+    commanded_move = abs(cmd_linear) > 0.03 or abs(cmd_angular) > 0.08
+    actual_move = actual_speed > 0.015 or abs(actual_yaw_rate) > 0.03
+    actual_stop_with_command = actual_motion_received and commanded_move and not actual_move
+    obstacle_label = canonical_obstacle_label(pred_label)
+    obj_object = obstacle_label + choose_josa(obstacle_label, "을", "를")
+    obj_subject = obstacle_label + choose_josa(obstacle_label, "이", "가")
+    strong_avoidance_change = path_change_changed and (
+        path_change_direction in ("left", "right") or abs(path_change_lateral_shift_m) >= 0.15
+    )
 
-    if pred_label == "사람":
-        scene = "전방 {} 사람 영향".format(side)
-        if path_blocked:
-            reason = "전방 사람 때문에 멈춤이나 우회를 검토한다고 본다."
-        elif path_change_changed:
-            reason = "{} 사람을 피해 경로를 조정한다고 본다.".format(side)
+    if global_path_length_m <= 0.35 and global_path_points <= 2 and not path_blocked:
+        scene = "목적지 도착"
+        reason = "목적지에 도착해 정지한 상태로 본다."
+        driving_mode = "목적지 도착"
+    elif actual_stop_with_command and not path_blocked:
+        scene = "명령 대비 실제 정지"
+        reason = "주행 명령은 있으나 실제 이동이 거의 없어 안전모드나 수동 정지 상태로 본다."
+        driving_mode = "실제 정지"
+    elif path_blocked:
+        scene = "전방 {} 장애물로 경로 차단".format(side)
+        reason = "전방 {}에 {} 인지되어 경로가 막혀 정지 또는 재계획을 진행하고 있다고 본다.".format(
+            side, obj_subject
+        )
+        driving_mode = "경로 차단"
+    elif strong_avoidance_change:
+        if path_change_direction == "left":
+            scene = "좌측 회피 경로 주행"
+            reason = "전방 {}의 {} 피해 좌측 회피 경로로 주행을 진행하고 있다고 본다.".format(
+                side, obj_object
+            )
+            driving_mode = "좌측 회피"
+        elif path_change_direction == "right":
+            scene = "우측 회피 경로 주행"
+            reason = "전방 {}의 {} 피해 우측 회피 경로로 주행을 진행하고 있다고 본다.".format(
+                side, obj_object
+            )
+            driving_mode = "우측 회피"
         else:
-            reason = "사람과의 간격을 보며 조심스럽게 진행한다고 본다."
+            turn_hint = "좌회전" if steering == "left" else "우회전" if steering == "right" else "회피"
+            scene = "회피 경로 재계획"
+            reason = "전방 {}의 {} 영향으로 {} 기반 회피 경로를 따라 주행하고 있다고 본다.".format(
+                side, obj_subject, turn_hint
+            )
+            driving_mode = "회피 주행"
     else:
-        if path_blocked:
-            scene = "전방 {} 근거리 장애물".format(side)
-            reason = "가까운 장애물 때문에 경로가 막혔다고 본다."
-        elif path_change_changed:
-            scene = "경로 {} 조정".format(path_change_direction)
-            reason = "장애물 위치 때문에 {} 방향으로 경로를 바꾼다고 본다.".format(path_change_direction)
-        elif steering in ("left", "right"):
-            turn_ko = "좌측" if steering == "left" else "우측"
-            scene = "전방 {} 구조물 영향".format(turn_ko)
-            reason = "{} 구조나 장애물을 보며 조향을 보정한다고 본다.".format(turn_ko)
-        elif near_range is not None and float(near_range) < 1.0:
-            scene = "전방 {} 근거리 구조".format(side)
-            reason = "가까운 구조물을 보며 속도와 진행 공간을 확인한다고 본다."
+        if steering in ("left", "right") and actual_move:
+            steer_ko = "좌측 조향" if steering == "left" else "우측 조향"
+            scene = "정상 경로 조향 보정"
+            reason = "현재 정상 경로를 따라가며 {}으로 주행을 보정하고 있다고 본다.".format(steer_ko)
         else:
-            scene = "통로 유지"
-            reason = "정적인 구조를 보며 현재 통로를 유지한다고 본다."
+            scene = "정상 경로 주행"
+            reason = "현재 정상 경로를 따라 목적지까지 주행을 진행하고 있다고 본다."
+        driving_mode = "정상 경로"
 
     return scene, reason, {
         "steering_direction": steering,
         "motion_state": motion_state_text,
         "path_change_direction": path_change_direction,
         "behavior_reason": behavior_reason,
+        "actual_motion_ko": actual_motion_ko,
+        "actual_speed_mps": actual_speed,
+        "actual_yaw_rate_radps": actual_yaw_rate,
+        "command_actual_mismatch": actual_stop_with_command,
+        "driving_mode": driving_mode,
+        "obstacle_label": obstacle_label,
     }
 
 
@@ -151,6 +278,7 @@ def render_panel(curr_bgr, pred_label, confidence, event_label, scene_summary, r
     planning = row.get("planning_summary") or {}
     control = row.get("control_summary") or {}
     obstacle = row.get("obstacle_summary") or {}
+    actual_motion = row.get("actual_motion_summary") or {}
     near_range = obstacle.get("near_raw_min_range_m")
 
     pil = PILImage.fromarray(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
@@ -167,9 +295,11 @@ def render_panel(curr_bgr, pred_label, confidence, event_label, scene_summary, r
     lines = [
         "event: {}".format(event_label),
         "대표 객체: {} ({:.2f})".format(pred_label, confidence),
-        "motion: {}".format(control.get("motion_state") or "unknown"),
+        "cmd motion: {}".format(control.get("motion_state") or "unknown"),
+        "actual motion: {}".format(actual_motion.get("motion_ko") or "unknown"),
         "steer: {}".format(control.get("steering_direction") or "unknown"),
         "path_change: {}".format(planning.get("path_change_direction") or "unknown"),
+        "actual speed: {:.2f} m/s".format(float(actual_motion.get("linear_speed_mps") or 0.0)),
         "near_range: {}".format("n/a" if near_range is None else "{:.2f} m".format(float(near_range))),
         "후보: {}".format(format_top_candidates(top_candidates)),
         "scene: {}".format(scene_summary),
@@ -198,6 +328,7 @@ class StudentXAIRichNode(object):
         self.point_cloud_topic = get_private_param(
             "point_cloud_topic", "/planning/linefit_ground/non_ground_cloud", explicit_args
         )
+        self.odom_topic = get_private_param("odom_topic", "/lio_localizer/odometry/optimization", explicit_args)
         self.output_topic = get_private_param("output_topic", "/student_xai/rich_reason", explicit_args)
         self.overlay_topic = get_private_param("overlay_topic", "/student_xai/rich_overlay", explicit_args)
         self.model_path = Path(
@@ -228,6 +359,7 @@ class StudentXAIRichNode(object):
 
         self.bridge = CvBridge()
         self.frames = deque(maxlen=3)
+        self.odom_window = deque(maxlen=20)
         self.latest_planner = None
         self.latest_cloud = None
         self.overlay_bgr = None
@@ -239,13 +371,15 @@ class StudentXAIRichNode(object):
         self.event_sub = rospy.Subscriber(self.event_topic, String, self._on_event, queue_size=20)
         self.planner_sub = rospy.Subscriber(self.planner_topic, String, self._on_planner, queue_size=20)
         self.point_cloud_sub = rospy.Subscriber(self.point_cloud_topic, PointCloud2, self._on_point_cloud, queue_size=2)
+        self.odom_sub = rospy.Subscriber(self.odom_topic, Odometry, self._on_odom, queue_size=20)
 
         rospy.loginfo(
-            "student_xai_rich_node started | image=%s event=%s planner=%s point_cloud=%s output=%s overlay=%s model=%s display_window=%s",
+            "student_xai_rich_node started | image=%s event=%s planner=%s point_cloud=%s odom=%s output=%s overlay=%s model=%s display_window=%s",
             self.image_topic,
             self.event_topic,
             self.planner_topic,
             self.point_cloud_topic,
+            self.odom_topic,
             self.output_topic,
             self.overlay_topic,
             self.model_path,
@@ -281,6 +415,17 @@ class StudentXAIRichNode(object):
             "frame_id": str(msg.header.frame_id or ""),
             "point_count": int((getattr(msg, "width", 0) or 0) * max(1, int(getattr(msg, "height", 1) or 1))),
         }
+
+    def _on_odom(self, msg):
+        pose = msg.pose.pose
+        self.odom_window.append(
+            {
+                "stamp": float(msg.header.stamp.to_sec()),
+                "x": float(pose.position.x),
+                "y": float(pose.position.y),
+                "yaw": quaternion_to_yaw(pose.orientation),
+            }
+        )
 
     def _on_event(self, msg):
         if len(self.frames) < 3 or self.latest_planner is None:
@@ -332,6 +477,8 @@ class StudentXAIRichNode(object):
             "planning_summary": planning_summary(planner_snapshot, event_data),
             "pointcloud_summary": pointcloud_summary,
         }
+        actual_motion = summarize_actual_motion(self.odom_window)
+        row["actual_motion_summary"] = actual_motion
 
         image_feature = load_image_feature_from_bgr(curr_bgr, self.image_size)
         context_feature = build_context_feature(row)
@@ -351,7 +498,7 @@ class StudentXAIRichNode(object):
         ]
         infer_ms = (time.perf_counter() - t0) * 1000.0
 
-        scene_summary, reason, aux = infer_scene_and_reason(pred_label, row)
+        scene_summary, reason, aux = infer_driving_message(pred_label, row, actual_motion)
         payload = {
             "frame_index": int(center["frame_index"]),
             "stamp": center["stamp"],
@@ -360,10 +507,14 @@ class StudentXAIRichNode(object):
             "confidence": confidence,
             "top_candidates": top_candidates,
             "motion_state": row["motion_state"],
+            "actual_motion": actual_motion,
             "steering_direction": aux["steering_direction"],
             "path_change_direction": aux["path_change_direction"],
             "planner_reason": row["planner_reason"],
             "motion_summary": motion_summary,
+            "driving_mode_ko": aux["driving_mode"],
+            "obstacle_label_ko": aux["obstacle_label"],
+            "command_actual_mismatch": aux["command_actual_mismatch"],
             "scene_summary_ko": scene_summary,
             "driving_reason_ko": reason,
             "infer_ms": infer_ms,
