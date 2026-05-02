@@ -171,6 +171,8 @@ def main():
                 "planner_reason": meta.get("planner_reason"),
                 "motion_state": meta.get("motion_state"),
                 "path_blocked": bool(meta.get("path_blocked")),
+                "emergency_summary": meta.get("emergency_summary") or {},
+                "stop_hits_summary": meta.get("stop_hits_summary") or {},
                 "control_summary": meta.get("control_summary") or {},
                 "planning_summary": meta.get("planning_summary") or {},
                 "pointcloud_summary": meta.get("pointcloud_summary") or {},

@@ -15,7 +15,7 @@ from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFont
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image, PointCloud2
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 from export_camera_only_teacher_dataset import summarize_flow
 from export_teacher_dataset import (
@@ -25,6 +25,7 @@ from export_teacher_dataset import (
     planner_reason,
     planning_summary,
     safe_json_loads,
+    summarize_stop_hits_cloud,
     stamp_to_float,
 )
 from student_baseline_common import build_context_feature, load_image_feature_from_bgr
@@ -376,7 +377,16 @@ class StudentXAIRichNode(object):
         self.point_cloud_topic = get_private_param(
             "point_cloud_topic", "/planning/linefit_ground/non_ground_cloud", explicit_args
         )
+        self.stop_hits_topic = get_private_param(
+            "stop_hits_topic", "/planning/near_field_stop_hits", explicit_args
+        )
         self.odom_topic = get_private_param("odom_topic", "/lio_localizer/odometry/optimization", explicit_args)
+        self.emergency_stop_topic = get_private_param(
+            "emergency_stop_topic", "/planning/emergency_stop", explicit_args
+        )
+        self.astar_path_blocked_topic = get_private_param(
+            "astar_path_blocked_topic", "/astar/path_blocked", explicit_args
+        )
         self.output_topic = get_private_param("output_topic", "/student_xai/rich_reason", explicit_args)
         self.overlay_topic = get_private_param("overlay_topic", "/student_xai/rich_overlay", explicit_args)
         self.model_path = Path(
@@ -409,6 +419,9 @@ class StudentXAIRichNode(object):
         self.odom_window = deque(maxlen=20)
         self.latest_planner = None
         self.latest_cloud = None
+        self.latest_stop_hits = None
+        self.latest_emergency_stop = None
+        self.latest_astar_path_blocked = None
         self.overlay_bgr = None
         self.frame_index = -1
         self.current_summary_payload = None
@@ -421,14 +434,22 @@ class StudentXAIRichNode(object):
         self.event_sub = rospy.Subscriber(self.event_topic, String, self._on_event, queue_size=20)
         self.planner_sub = rospy.Subscriber(self.planner_topic, String, self._on_planner, queue_size=20)
         self.point_cloud_sub = rospy.Subscriber(self.point_cloud_topic, PointCloud2, self._on_point_cloud, queue_size=2)
+        self.stop_hits_sub = rospy.Subscriber(self.stop_hits_topic, PointCloud2, self._on_stop_hits, queue_size=2)
         self.odom_sub = rospy.Subscriber(self.odom_topic, Odometry, self._on_odom, queue_size=20)
+        self.emergency_stop_sub = rospy.Subscriber(self.emergency_stop_topic, Bool, self._on_emergency_stop, queue_size=20)
+        self.astar_path_blocked_sub = rospy.Subscriber(
+            self.astar_path_blocked_topic, Bool, self._on_astar_path_blocked, queue_size=20
+        )
 
         rospy.loginfo(
-            "student_xai_rich_node started | image=%s event=%s planner=%s point_cloud=%s odom=%s output=%s overlay=%s model=%s display_window=%s",
+            "student_xai_rich_node started | image=%s event=%s planner=%s point_cloud=%s stop_hits=%s emergency=%s astar_blocked=%s odom=%s output=%s overlay=%s model=%s display_window=%s",
             self.image_topic,
             self.event_topic,
             self.planner_topic,
             self.point_cloud_topic,
+            self.stop_hits_topic,
+            self.emergency_stop_topic,
+            self.astar_path_blocked_topic,
             self.odom_topic,
             self.output_topic,
             self.overlay_topic,
@@ -464,6 +485,21 @@ class StudentXAIRichNode(object):
             "stamp": float(msg.header.stamp.to_sec()),
             "frame_id": str(msg.header.frame_id or ""),
             "point_count": int((getattr(msg, "width", 0) or 0) * max(1, int(getattr(msg, "height", 1) or 1))),
+        }
+
+    def _on_stop_hits(self, msg):
+        self.latest_stop_hits = summarize_stop_hits_cloud(msg, 2500)
+
+    def _on_emergency_stop(self, msg):
+        self.latest_emergency_stop = {
+            "stamp": rospy.Time.now().to_sec(),
+            "value": bool(getattr(msg, "data", False)),
+        }
+
+    def _on_astar_path_blocked(self, msg):
+        self.latest_astar_path_blocked = {
+            "stamp": rospy.Time.now().to_sec(),
+            "value": bool(getattr(msg, "data", False)),
         }
 
     def _on_odom(self, msg):
@@ -514,6 +550,17 @@ class StudentXAIRichNode(object):
                 "stamp": self.latest_cloud["stamp"],
                 "point_count": int(self.latest_cloud["point_count"]),
             }
+        stop_hits_summary = self.latest_stop_hits or {
+            "frame_id": None,
+            "stamp": None,
+            "point_count": 0,
+            "min_range_m": None,
+            "min_x_m": None,
+        }
+        emergency_summary = {
+            "emergency_stop_active": bool(self.latest_emergency_stop["value"]) if self.latest_emergency_stop else False,
+            "astar_path_blocked": bool(self.latest_astar_path_blocked["value"]) if self.latest_astar_path_blocked else False,
+        }
 
         row = {
             "source_bag_stem": "record_real_realtime",
@@ -523,6 +570,8 @@ class StudentXAIRichNode(object):
             "path_blocked": bool((((event_data.get("decision") or {}).get("path_blocked") or {}).get("value"))),
             "motion_summary": motion_summary,
             "obstacle_summary": obstacle_summary(event_data),
+            "stop_hits_summary": stop_hits_summary,
+            "emergency_summary": emergency_summary,
             "control_summary": control_summary(planner_snapshot, event_data),
             "planning_summary": planning_summary(planner_snapshot, event_data),
             "pointcloud_summary": pointcloud_summary,

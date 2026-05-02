@@ -42,6 +42,8 @@ def build_context_feature(row):
     centroid = obstacle.get("near_raw_centroid_xyz") or {}
     motion = row.get("motion_summary") or {}
     actual_motion = row.get("actual_motion_summary") or {}
+    emergency = row.get("emergency_summary") or {}
+    stop_hits = row.get("stop_hits_summary") or {}
     control = row.get("control_summary") or {}
     planning = row.get("planning_summary") or {}
     prev_to_curr = motion.get("prev_to_curr") or {}
@@ -53,9 +55,14 @@ def build_context_feature(row):
         "planner_reason={}".format(row.get("planner_reason") or "unknown"): 1.0,
         "scene_domain={}".format(row.get("scene_domain_ko") or "불명"): 1.0,
         "path_blocked": float(bool(row.get("path_blocked"))),
+        "emergency_stop_active": float(bool(emergency.get("emergency_stop_active"))),
+        "astar_path_blocked": float(bool(emergency.get("astar_path_blocked"))),
         "near_raw_points": float(obstacle.get("near_raw_points") or 0.0),
         "near_raw_min_range_m": float(obstacle.get("near_raw_min_range_m") or 0.0),
         "near_raw_min_x_m": float(obstacle.get("near_raw_min_x_m") or 0.0),
+        "stop_hits_points": float(stop_hits.get("point_count") or 0.0),
+        "stop_hits_min_range_m": float(stop_hits.get("min_range_m") or 0.0),
+        "stop_hits_min_x_m": float(stop_hits.get("min_x_m") or 0.0),
         "near_raw_centroid_x": float(centroid.get("x") or 0.0),
         "near_raw_centroid_y": float(centroid.get("y") or 0.0),
         "near_raw_centroid_z": float(centroid.get("z") or 0.0),

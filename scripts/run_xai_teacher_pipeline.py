@@ -15,8 +15,11 @@ def parse_args():
     parser.add_argument("--planner-topic", default="/xai/planner_snapshot")
     parser.add_argument("--event-topic", default="/xai/event_log")
     parser.add_argument("--point-cloud-topic", default="/planning/linefit_ground/non_ground_cloud")
+    parser.add_argument("--stop-hits-topic", default="/planning/near_field_stop_hits")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel")
     parser.add_argument("--odom-topic", default="/odom")
+    parser.add_argument("--emergency-stop-topic", default="/planning/emergency_stop")
+    parser.add_argument("--astar-path-blocked-topic", default="/astar/path_blocked")
     parser.add_argument("--max-image-age-s", type=float, default=0.25)
     parser.add_argument("--max-planner-age-s", type=float, default=0.75)
     parser.add_argument("--max-pointcloud-age-s", type=float, default=0.40)
@@ -79,10 +82,16 @@ def main():
             str(args.event_topic),
             "--point-cloud-topic",
             str(args.point_cloud_topic),
+            "--stop-hits-topic",
+            str(args.stop_hits_topic),
             "--cmd-vel-topic",
             str(args.cmd_vel_topic),
             "--odom-topic",
             str(args.odom_topic),
+            "--emergency-stop-topic",
+            str(args.emergency_stop_topic),
+            "--astar-path-blocked-topic",
+            str(args.astar_path_blocked_topic),
             "--max-image-age-s",
             str(float(args.max_image_age_s)),
             "--max-planner-age-s",

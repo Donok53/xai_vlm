@@ -102,8 +102,11 @@ def parse_args():
         "--point-cloud-topic",
         default="/planning/linefit_ground/non_ground_cloud",
     )
+    parser.add_argument("--stop-hits-topic", default="/planning/near_field_stop_hits")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel")
     parser.add_argument("--odom-topic", default="/odom")
+    parser.add_argument("--emergency-stop-topic", default="/planning/emergency_stop")
+    parser.add_argument("--astar-path-blocked-topic", default="/astar/path_blocked")
     parser.add_argument("--max-image-age-s", type=float, default=0.25)
     parser.add_argument("--max-planner-age-s", type=float, default=0.75)
     parser.add_argument("--max-pointcloud-age-s", type=float, default=0.40)
@@ -225,6 +228,27 @@ def sample_point_cloud(msg, max_points):
     return np.asarray(points, dtype=np.float32)
 
 
+def summarize_stop_hits_cloud(msg, max_points):
+    points_xyz = sample_point_cloud(msg, max_points)
+    if points_xyz.size == 0:
+        return {
+            "frame_id": str(msg.header.frame_id or ""),
+            "stamp": float(msg.header.stamp.to_sec()),
+            "point_count": 0,
+            "min_range_m": None,
+            "min_x_m": None,
+        }
+    xy = points_xyz[:, :2]
+    ranges = np.linalg.norm(xy, axis=1)
+    return {
+        "frame_id": str(msg.header.frame_id or ""),
+        "stamp": float(msg.header.stamp.to_sec()),
+        "point_count": int(points_xyz.shape[0]),
+        "min_range_m": float(np.min(ranges)),
+        "min_x_m": float(np.min(points_xyz[:, 0])),
+    }
+
+
 def obstacle_summary(event_data):
     obstacle = (event_data or {}).get("obstacle_evidence") or {}
     near_raw = obstacle.get("near_field_raw_overlay_hits") or {}
@@ -319,6 +343,8 @@ def build_teacher_prompt(sample):
     planning = sample.get("planning_summary") or {}
     motion = sample.get("motion_summary") or {}
     actual_motion = sample.get("actual_motion_summary") or {}
+    emergency = sample.get("emergency_summary") or {}
+    stop_hits = sample.get("stop_hits_summary") or {}
     near_range = obstacle.get("near_raw_min_range_m")
     near_centroid = obstacle.get("near_raw_centroid_xyz") or {}
     near_centroid_text = json.dumps(near_centroid, ensure_ascii=False)
@@ -355,6 +381,10 @@ def build_teacher_prompt(sample):
         "- path_change_lateral_shift_m: {:.3f}".format(float(planning.get("path_change_lateral_shift_m") or 0.0)),
         "- global_path_length_m: {:.3f}".format(float(planning.get("global_path_length_m") or 0.0)),
         "- global_path_points: {}".format(int(planning.get("global_path_points") or 0)),
+        "- emergency_stop_active: {}".format(bool(emergency.get("emergency_stop_active"))),
+        "- astar_path_blocked: {}".format(bool(emergency.get("astar_path_blocked"))),
+        "- stop_hits_points: {}".format(int(stop_hits.get("point_count") or 0)),
+        "- stop_hits_min_range_m: {}".format(stop_hits.get("min_range_m")),
         "- near_raw_min_range_m: {}".format(near_range),
         "- near_raw_centroid_xyz: {}".format(near_centroid_text),
         "- camera_motion_ego: {}".format(motion.get("ego_motion_ko") or "정지"),
@@ -416,14 +446,20 @@ def main():
             bag_stem = bag_path.stem
 
             with rosbag.Bag(str(bag_path)) as bag:
+                latest_stop_hits = None
+                latest_emergency_stop = None
+                latest_astar_path_blocked = None
                 for topic, msg, bag_stamp in bag.read_messages(
                     topics=[
                         args.image_topic,
                         args.planner_topic,
                         args.event_topic,
                         args.point_cloud_topic,
+                        args.stop_hits_topic,
                         args.cmd_vel_topic,
                         args.odom_topic,
+                        args.emergency_stop_topic,
+                        args.astar_path_blocked_topic,
                     ]
                 ):
                     if topic == args.image_topic:
@@ -450,6 +486,10 @@ def main():
                         }
                         continue
 
+                    if topic == args.stop_hits_topic:
+                        latest_stop_hits = summarize_stop_hits_cloud(msg, args.max_pointcloud_points)
+                        continue
+
                     if topic == args.odom_topic:
                         odom_window.append(
                             {
@@ -459,6 +499,20 @@ def main():
                                 "yaw": quaternion_to_yaw(msg.pose.pose.orientation),
                             }
                         )
+                        continue
+
+                    if topic == args.emergency_stop_topic:
+                        latest_emergency_stop = {
+                            "stamp": float(bag_stamp.to_sec()),
+                            "value": bool(getattr(msg, "data", False)),
+                        }
+                        continue
+
+                    if topic == args.astar_path_blocked_topic:
+                        latest_astar_path_blocked = {
+                            "stamp": float(bag_stamp.to_sec()),
+                            "value": bool(getattr(msg, "data", False)),
+                        }
                         continue
 
                     if topic == args.cmd_vel_topic:
@@ -525,6 +579,17 @@ def main():
 
                     planner_snapshot = latest_planner["data"]
                     event_label = str(event_data.get("event_label") or "unknown")
+                    emergency_summary = {
+                        "emergency_stop_active": bool(latest_emergency_stop["value"]) if latest_emergency_stop else False,
+                        "astar_path_blocked": bool(latest_astar_path_blocked["value"]) if latest_astar_path_blocked else False,
+                    }
+                    stop_hits_summary = latest_stop_hits or {
+                        "frame_id": None,
+                        "stamp": None,
+                        "point_count": 0,
+                        "min_range_m": None,
+                        "min_x_m": None,
+                    }
                     sample = {
                         "sample_id": sample_id,
                         "stamp": event_stamp,
@@ -539,7 +604,9 @@ def main():
                         "actual_motion_summary": actual_motion_summary,
                         "pointcloud_path": pointcloud_relpath,
                         "pointcloud_summary": pointcloud_summary,
+                        "stop_hits_summary": stop_hits_summary,
                         "obstacle_summary": obstacle_summary(event_data),
+                        "emergency_summary": emergency_summary,
                         "control_summary": control_summary(planner_snapshot, event_data),
                         "planning_summary": planning_summary(planner_snapshot, event_data),
                         "teacher_label_candidates_ko": list(ALLOWED_LABELS_KO),
