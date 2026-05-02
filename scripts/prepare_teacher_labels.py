@@ -165,6 +165,7 @@ def main():
                 "source_bag": meta.get("source_bag"),
                 "source_bag_stem": meta.get("source_bag_stem"),
                 "motion_summary": meta.get("motion_summary") or {},
+                "actual_motion_summary": meta.get("actual_motion_summary") or {},
                 "pointcloud_path": meta.get("pointcloud_path"),
                 "event_label": meta.get("event_label"),
                 "planner_reason": meta.get("planner_reason"),

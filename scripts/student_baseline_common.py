@@ -41,6 +41,7 @@ def build_context_feature(row):
     obstacle = row.get("obstacle_summary") or {}
     centroid = obstacle.get("near_raw_centroid_xyz") or {}
     motion = row.get("motion_summary") or {}
+    actual_motion = row.get("actual_motion_summary") or {}
     control = row.get("control_summary") or {}
     planning = row.get("planning_summary") or {}
     prev_to_curr = motion.get("prev_to_curr") or {}
@@ -62,6 +63,7 @@ def build_context_feature(row):
         "dominant_motion={}".format(motion.get("dominant_motion_ko") or "unknown"): 1.0,
         "ego_motion={}".format(motion.get("ego_motion_ko") or "unknown"): 1.0,
         "scene_state={}".format(motion.get("scene_state_ko") or "unknown"): 1.0,
+        "actual_motion={}".format(actual_motion.get("motion_ko") or "실제 이동 정보 없음"): 1.0,
         "steering_direction={}".format(control.get("steering_direction") or "unknown"): 1.0,
         "control_motion_state={}".format(control.get("motion_state") or row.get("motion_state") or "unknown"): 1.0,
         "path_change_direction={}".format(planning.get("path_change_direction") or "unknown"): 1.0,
@@ -74,6 +76,12 @@ def build_context_feature(row):
         "global_path_length_m": float(planning.get("global_path_length_m") or 0.0),
         "global_path_points": float(planning.get("global_path_points") or 0.0),
         "speed_limit_mps": float(planning.get("speed_limit_mps") or 0.0),
+        "actual_linear_speed_mps": float(actual_motion.get("linear_speed_mps") or 0.0),
+        "actual_yaw_rate_radps": float(actual_motion.get("yaw_rate_radps") or 0.0),
+        "command_actual_mismatch": float(
+            (float(control.get("linear_x_mps") or 0.0) > 0.02 or abs(float(control.get("angular_z_radps") or 0.0)) > 0.05)
+            and str(actual_motion.get("motion_ko") or "") == "정지"
+        ),
         "prev_to_curr_mean_magnitude": float(prev_to_curr.get("mean_magnitude") or 0.0),
         "prev_to_curr_moving_ratio": float(prev_to_curr.get("moving_ratio") or 0.0),
         "prev_to_curr_center_moving_ratio": float(prev_to_curr.get("center_moving_ratio") or 0.0),

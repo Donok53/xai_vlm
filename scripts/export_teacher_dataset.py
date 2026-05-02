@@ -93,7 +93,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Export offline VLM teacher dataset from ROS bag."
     )
-    parser.add_argument("--bag", required=True)
+    parser.add_argument("--bag", required=True, nargs="+")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--image-topic", default="/camera/color/image_raw")
     parser.add_argument("--planner-topic", default="/xai/planner_snapshot")
@@ -103,6 +103,7 @@ def parse_args():
         default="/planning/linefit_ground/non_ground_cloud",
     )
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel")
+    parser.add_argument("--odom-topic", default="/odom")
     parser.add_argument("--max-image-age-s", type=float, default=0.25)
     parser.add_argument("--max-planner-age-s", type=float, default=0.75)
     parser.add_argument("--max-pointcloud-age-s", type=float, default=0.40)
@@ -128,6 +129,81 @@ def stamp_to_float(value, fallback=None):
         return float(value)
     except Exception:
         return fallback
+
+
+def quaternion_to_yaw(orientation):
+    x = float(getattr(orientation, "x", 0.0))
+    y = float(getattr(orientation, "y", 0.0))
+    z = float(getattr(orientation, "z", 0.0))
+    w = float(getattr(orientation, "w", 1.0))
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def normalize_angle(angle):
+    value = float(angle)
+    while value > math.pi:
+        value -= 2.0 * math.pi
+    while value < -math.pi:
+        value += 2.0 * math.pi
+    return value
+
+
+def summarize_actual_motion(odom_window):
+    if len(odom_window) < 2:
+        return {
+            "received": False,
+            "motion_ko": "실제 이동 정보 없음",
+            "linear_speed_mps": 0.0,
+            "yaw_rate_radps": 0.0,
+            "distance_m": 0.0,
+        }
+
+    first = odom_window[0]
+    last = odom_window[-1]
+    dt = max(1e-3, float(last["stamp"] - first["stamp"]))
+    dx = float(last["x"] - first["x"])
+    dy = float(last["y"] - first["y"])
+    distance = math.hypot(dx, dy)
+    linear_speed = distance / dt
+    yaw_delta = normalize_angle(float(last["yaw"] - first["yaw"]))
+    yaw_rate = yaw_delta / dt
+
+    stopped = linear_speed < 0.008 and abs(yaw_rate) < 0.03
+    if stopped:
+        motion_ko = "정지"
+    else:
+        forward_component = dx
+        if forward_component > 0.015:
+            if yaw_rate > 0.05:
+                motion_ko = "전진 좌회전"
+            elif yaw_rate < -0.05:
+                motion_ko = "전진 우회전"
+            else:
+                motion_ko = "전진"
+        elif forward_component < -0.015:
+            if yaw_rate > 0.05:
+                motion_ko = "후진 좌회전"
+            elif yaw_rate < -0.05:
+                motion_ko = "후진 우회전"
+            else:
+                motion_ko = "후진"
+        else:
+            if yaw_rate > 0.05:
+                motion_ko = "좌회전"
+            elif yaw_rate < -0.05:
+                motion_ko = "우회전"
+            else:
+                motion_ko = "정지"
+
+    return {
+        "received": True,
+        "motion_ko": motion_ko,
+        "linear_speed_mps": linear_speed,
+        "yaw_rate_radps": yaw_rate,
+        "distance_m": distance,
+    }
 
 
 def sample_point_cloud(msg, max_points):
@@ -242,13 +318,23 @@ def build_teacher_prompt(sample):
     control = sample.get("control_summary") or {}
     planning = sample.get("planning_summary") or {}
     motion = sample.get("motion_summary") or {}
+    actual_motion = sample.get("actual_motion_summary") or {}
     near_range = obstacle.get("near_raw_min_range_m")
     near_centroid = obstacle.get("near_raw_centroid_xyz") or {}
     near_centroid_text = json.dumps(near_centroid, ensure_ascii=False)
+    command_vs_actual = (
+        "명령 대비 실제 이동 없음"
+        if (
+            (float(control.get("linear_x_mps") or 0.0) > 0.02 or abs(float(control.get("angular_z_radps") or 0.0)) > 0.05)
+            and actual_motion.get("received")
+            and str(actual_motion.get("motion_ko") or "") == "정지"
+        )
+        else "일치 또는 정보 부족"
+    )
 
     prompt_lines = [
         "너는 자율주행 XAI teacher 모델이다.",
-        "세 장의 연속 카메라 프레임(prev, current, next)과 planner/LiDAR/cmd_vel 문맥을 함께 보고, 현재 장면에서 왜 그런 주행 판단이 나왔는지 설명하라.",
+        "세 장의 연속 카메라 프레임(prev, current, next)과 planner/LiDAR/cmd_vel/odom 문맥을 함께 보고, 현재 장면에서 왜 그런 주행 판단이 나왔는지 설명하라.",
         "목표는 planner/LiDAR 맥락과 가장 관련 있는 대표 시각 객체를 1개 고르고, 현재 주행 판단의 시각적 이유를 짧게 정리하는 것이다.",
         "설명은 카메라에 실제로 보이는 것과 제공된 planner/LiDAR/cmd_vel 문맥을 함께 사용하되, planner의 reason 문장을 그대로 복사하지 마라.",
         "",
@@ -258,6 +344,10 @@ def build_teacher_prompt(sample):
         "- motion_state: {}".format(motion_state_text),
         "- cmd_vel.linear_x_mps: {:.3f}".format(float(control.get("linear_x_mps") or 0.0)),
         "- cmd_vel.angular_z_radps: {:.3f}".format(float(control.get("angular_z_radps") or 0.0)),
+        "- actual_motion.motion_ko: {}".format(actual_motion.get("motion_ko") or "실제 이동 정보 없음"),
+        "- actual_motion.linear_speed_mps: {:.3f}".format(float(actual_motion.get("linear_speed_mps") or 0.0)),
+        "- actual_motion.yaw_rate_radps: {:.3f}".format(float(actual_motion.get("yaw_rate_radps") or 0.0)),
+        "- command_vs_actual: {}".format(command_vs_actual),
         "- steering_direction: {}".format(control.get("steering_direction") or "unknown"),
         "- path_blocked: {}".format(bool(planning.get("path_blocked"))),
         "- path_change_changed: {}".format(bool(planning.get("path_change_changed"))),
@@ -307,148 +397,166 @@ def ensure_dirs(output_dir):
 
 def main():
     args = parse_args()
-    bag_path = Path(args.bag).expanduser().resolve()
+    bag_paths = [Path(raw).expanduser().resolve() for raw in args.bag]
     output_dir = Path(args.output_dir).expanduser().resolve()
     ensure_dirs(output_dir)
 
     bridge = CvBridge()
-    latest_image = None
-    recent_images = deque(maxlen=3)
-    latest_planner = None
-    latest_cloud = None
     exported = 0
     skipped = 0
 
     metadata_path = output_dir / "metadata" / "teacher_dataset.jsonl"
-    with rosbag.Bag(str(bag_path)) as bag, metadata_path.open("w", encoding="utf-8") as metadata_file:
-        for topic, msg, bag_stamp in bag.read_messages(
-            topics=[
-                args.image_topic,
-                args.planner_topic,
-                args.event_topic,
-                args.point_cloud_topic,
-                args.cmd_vel_topic,
-            ]
-        ):
-            if topic == args.image_topic:
-                latest_image = {
-                    "stamp": float(msg.header.stamp.to_sec()),
-                    "msg": msg,
-                }
-                recent_images.append(latest_image)
-                continue
+    with metadata_path.open("w", encoding="utf-8") as metadata_file:
+        for bag_path in bag_paths:
+            latest_image = None
+            recent_images = deque(maxlen=3)
+            latest_planner = None
+            latest_cloud = None
+            odom_window = deque(maxlen=20)
+            bag_stem = bag_path.stem
 
-            if topic == args.planner_topic:
-                snapshot = safe_json_loads(msg.data)
-                latest_planner = {
-                    "stamp": stamp_to_float(snapshot.get("stamp"), float(bag_stamp.to_sec())),
-                    "data": snapshot,
-                }
-                continue
+            with rosbag.Bag(str(bag_path)) as bag:
+                for topic, msg, bag_stamp in bag.read_messages(
+                    topics=[
+                        args.image_topic,
+                        args.planner_topic,
+                        args.event_topic,
+                        args.point_cloud_topic,
+                        args.cmd_vel_topic,
+                        args.odom_topic,
+                    ]
+                ):
+                    if topic == args.image_topic:
+                        latest_image = {
+                            "stamp": float(msg.header.stamp.to_sec()),
+                            "msg": msg,
+                        }
+                        recent_images.append(latest_image)
+                        continue
 
-            if topic == args.point_cloud_topic:
-                latest_cloud = {
-                    "stamp": float(msg.header.stamp.to_sec()),
-                    "frame_id": str(msg.header.frame_id or ""),
-                    "msg": msg,
-                }
-                continue
+                    if topic == args.planner_topic:
+                        snapshot = safe_json_loads(msg.data)
+                        latest_planner = {
+                            "stamp": stamp_to_float(snapshot.get("stamp"), float(bag_stamp.to_sec())),
+                            "data": snapshot,
+                        }
+                        continue
 
-            if topic == args.cmd_vel_topic:
-                # planner/event_log already mirrors cmd_vel semantics, so no-op here for now.
-                continue
+                    if topic == args.point_cloud_topic:
+                        latest_cloud = {
+                            "stamp": float(msg.header.stamp.to_sec()),
+                            "frame_id": str(msg.header.frame_id or ""),
+                            "msg": msg,
+                        }
+                        continue
 
-            if topic != args.event_topic:
-                continue
+                    if topic == args.odom_topic:
+                        odom_window.append(
+                            {
+                                "stamp": float(msg.header.stamp.to_sec()),
+                                "x": float(msg.pose.pose.position.x),
+                                "y": float(msg.pose.pose.position.y),
+                                "yaw": quaternion_to_yaw(msg.pose.pose.orientation),
+                            }
+                        )
+                        continue
 
-            event_data = safe_json_loads(msg.data)
-            event_stamp = stamp_to_float(event_data.get("stamp"), float(bag_stamp.to_sec()))
+                    if topic == args.cmd_vel_topic:
+                        continue
 
-            if latest_image is None:
-                skipped += 1
-                continue
-            if abs(event_stamp - latest_image["stamp"]) > float(args.max_image_age_s):
-                skipped += 1
-                continue
-            if latest_planner is None or abs(event_stamp - latest_planner["stamp"]) > float(args.max_planner_age_s):
-                skipped += 1
-                continue
+                    if topic != args.event_topic:
+                        continue
 
-            image_bgr = bridge.imgmsg_to_cv2(
-                latest_image["msg"],
-                desired_encoding="bgr8",
-            )
+                    event_data = safe_json_loads(msg.data)
+                    event_stamp = stamp_to_float(event_data.get("stamp"), float(bag_stamp.to_sec()))
 
-            sample_id = "sample_{:05d}".format(exported)
-            image_rel_paths = []
-            if len(recent_images) >= 3:
-                triplet = [recent_images[0], recent_images[1], recent_images[2]]
-            else:
-                triplet = [latest_image, latest_image, latest_image]
-            for suffix, image_item in zip(["prev", "current", "next"], triplet):
-                rel_path = Path("images") / "{}_{}.jpg".format(sample_id, suffix)
-                abs_path = output_dir / rel_path
-                image_item_bgr = bridge.imgmsg_to_cv2(image_item["msg"], desired_encoding="bgr8")
-                cv2.imwrite(
-                    str(abs_path),
-                    image_item_bgr,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), int(args.jpeg_quality)],
-                )
-                image_rel_paths.append(str(rel_path))
+                    if latest_image is None:
+                        skipped += 1
+                        continue
+                    if abs(event_stamp - latest_image["stamp"]) > float(args.max_image_age_s):
+                        skipped += 1
+                        continue
+                    if latest_planner is None or abs(event_stamp - latest_planner["stamp"]) > float(args.max_planner_age_s):
+                        skipped += 1
+                        continue
 
-            motion_summary = summarize_flow(
-                bridge.imgmsg_to_cv2(triplet[0]["msg"], desired_encoding="bgr8"),
-                bridge.imgmsg_to_cv2(triplet[1]["msg"], desired_encoding="bgr8"),
-                bridge.imgmsg_to_cv2(triplet[2]["msg"], desired_encoding="bgr8"),
-                args.flow_image_side_px,
-                args.flow_motion_threshold,
-            )
+                    sample_id = "sample_{:05d}".format(exported)
+                    image_rel_paths = []
+                    if len(recent_images) >= 3:
+                        triplet = [recent_images[0], recent_images[1], recent_images[2]]
+                    else:
+                        triplet = [latest_image, latest_image, latest_image]
+                    for suffix, image_item in zip(["prev", "current", "next"], triplet):
+                        rel_path = Path("images") / "{}_{}.jpg".format(sample_id, suffix)
+                        abs_path = output_dir / rel_path
+                        image_item_bgr = bridge.imgmsg_to_cv2(image_item["msg"], desired_encoding="bgr8")
+                        cv2.imwrite(
+                            str(abs_path),
+                            image_item_bgr,
+                            [int(cv2.IMWRITE_JPEG_QUALITY), int(args.jpeg_quality)],
+                        )
+                        image_rel_paths.append(str(rel_path))
 
-            pointcloud_relpath = None
-            pointcloud_summary = {
-                "frame_id": None,
-                "stamp": None,
-                "point_count": 0,
-            }
-            if latest_cloud is not None and abs(event_stamp - latest_cloud["stamp"]) <= float(args.max_pointcloud_age_s):
-                points_xyz = sample_point_cloud(latest_cloud["msg"], args.max_pointcloud_points)
-                pointcloud_path = output_dir / "pointcloud" / "{}.npz".format(sample_id)
-                np.savez_compressed(pointcloud_path, points_xyz=points_xyz)
-                pointcloud_relpath = str(pointcloud_path.relative_to(output_dir))
-                pointcloud_summary = {
-                    "frame_id": latest_cloud["frame_id"],
-                    "stamp": latest_cloud["stamp"],
-                    "point_count": int(points_xyz.shape[0]),
-                }
+                    motion_summary = summarize_flow(
+                        bridge.imgmsg_to_cv2(triplet[0]["msg"], desired_encoding="bgr8"),
+                        bridge.imgmsg_to_cv2(triplet[1]["msg"], desired_encoding="bgr8"),
+                        bridge.imgmsg_to_cv2(triplet[2]["msg"], desired_encoding="bgr8"),
+                        args.flow_image_side_px,
+                        args.flow_motion_threshold,
+                    )
+                    actual_motion_summary = summarize_actual_motion(odom_window)
 
-            planner_snapshot = latest_planner["data"]
-            event_label = str(event_data.get("event_label") or "unknown")
-            sample = {
-                "sample_id": sample_id,
-                "stamp": event_stamp,
-                "event_label": event_label,
-                "event_type": str(event_data.get("event_type") or "unknown"),
-                "planner_reason": planner_reason(planner_snapshot, event_data),
-                "motion_state": motion_state(planner_snapshot, event_data),
-                "path_blocked": bool((((event_data.get("decision") or {}).get("path_blocked") or {}).get("value"))),
-                "image_path": image_rel_paths[1],
-                "temporal_image_paths": image_rel_paths,
-                "motion_summary": motion_summary,
-                "pointcloud_path": pointcloud_relpath,
-                "pointcloud_summary": pointcloud_summary,
-                "obstacle_summary": obstacle_summary(event_data),
-                "control_summary": control_summary(planner_snapshot, event_data),
-                "planning_summary": planning_summary(planner_snapshot, event_data),
-                "teacher_label_candidates_ko": list(ALLOWED_LABELS_KO),
-                "planner_snapshot": planner_snapshot,
-                "event_log": event_data,
-            }
-            sample["teacher_prompt_ko"] = build_teacher_prompt(sample)
-            metadata_file.write(json.dumps(sample, ensure_ascii=False) + "\n")
+                    pointcloud_relpath = None
+                    pointcloud_summary = {
+                        "frame_id": None,
+                        "stamp": None,
+                        "point_count": 0,
+                    }
+                    if latest_cloud is not None and abs(event_stamp - latest_cloud["stamp"]) <= float(args.max_pointcloud_age_s):
+                        points_xyz = sample_point_cloud(latest_cloud["msg"], args.max_pointcloud_points)
+                        pointcloud_path = output_dir / "pointcloud" / "{}.npz".format(sample_id)
+                        np.savez_compressed(pointcloud_path, points_xyz=points_xyz)
+                        pointcloud_relpath = str(pointcloud_path.relative_to(output_dir))
+                        pointcloud_summary = {
+                            "frame_id": latest_cloud["frame_id"],
+                            "stamp": latest_cloud["stamp"],
+                            "point_count": int(points_xyz.shape[0]),
+                        }
 
-            exported += 1
-            if args.limit > 0 and exported >= int(args.limit):
-                break
+                    planner_snapshot = latest_planner["data"]
+                    event_label = str(event_data.get("event_label") or "unknown")
+                    sample = {
+                        "sample_id": sample_id,
+                        "stamp": event_stamp,
+                        "event_label": event_label,
+                        "event_type": str(event_data.get("event_type") or "unknown"),
+                        "planner_reason": planner_reason(planner_snapshot, event_data),
+                        "motion_state": motion_state(planner_snapshot, event_data),
+                        "path_blocked": bool((((event_data.get("decision") or {}).get("path_blocked") or {}).get("value"))),
+                        "image_path": image_rel_paths[1],
+                        "temporal_image_paths": image_rel_paths,
+                        "motion_summary": motion_summary,
+                        "actual_motion_summary": actual_motion_summary,
+                        "pointcloud_path": pointcloud_relpath,
+                        "pointcloud_summary": pointcloud_summary,
+                        "obstacle_summary": obstacle_summary(event_data),
+                        "control_summary": control_summary(planner_snapshot, event_data),
+                        "planning_summary": planning_summary(planner_snapshot, event_data),
+                        "teacher_label_candidates_ko": list(ALLOWED_LABELS_KO),
+                        "planner_snapshot": planner_snapshot,
+                        "event_log": event_data,
+                        "source_bag": str(bag_path),
+                        "source_bag_stem": bag_stem,
+                    }
+                    sample["teacher_prompt_ko"] = build_teacher_prompt(sample)
+                    metadata_file.write(json.dumps(sample, ensure_ascii=False) + "\n")
+
+                    exported += 1
+                    if args.limit > 0 and exported >= int(args.limit):
+                        break
+
+                if args.limit > 0 and exported >= int(args.limit):
+                    break
 
     print("exported_samples={}".format(exported))
     print("skipped_events={}".format(skipped))

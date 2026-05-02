@@ -9,13 +9,14 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Run richer XAI-aware teacher pipeline for record_real-style bag."
     )
-    parser.add_argument("--bag", required=True)
+    parser.add_argument("--bag", required=True, nargs="+")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--image-topic", default="/camera/color/image_raw")
     parser.add_argument("--planner-topic", default="/xai/planner_snapshot")
     parser.add_argument("--event-topic", default="/xai/event_log")
     parser.add_argument("--point-cloud-topic", default="/planning/linefit_ground/non_ground_cloud")
     parser.add_argument("--cmd-vel-topic", default="/cmd_vel")
+    parser.add_argument("--odom-topic", default="/odom")
     parser.add_argument("--max-image-age-s", type=float, default=0.25)
     parser.add_argument("--max-planner-age-s", type=float, default=0.75)
     parser.add_argument("--max-pointcloud-age-s", type=float, default=0.40)
@@ -60,7 +61,7 @@ def main():
     args = parse_args()
     project_dir = Path(__file__).resolve().parent.parent
     output_dir = Path(args.output_dir).expanduser().resolve()
-    bag_path = Path(args.bag).expanduser().resolve()
+    bag_paths = [Path(raw).expanduser().resolve() for raw in args.bag]
     python_bin = sys.executable
 
     if not args.skip_export:
@@ -68,7 +69,6 @@ def main():
             python_bin,
             str(project_dir / "scripts" / "export_teacher_dataset.py"),
             "--bag",
-            str(bag_path),
             "--output-dir",
             str(output_dir),
             "--image-topic",
@@ -81,6 +81,8 @@ def main():
             str(args.point_cloud_topic),
             "--cmd-vel-topic",
             str(args.cmd_vel_topic),
+            "--odom-topic",
+            str(args.odom_topic),
             "--max-image-age-s",
             str(float(args.max_image_age_s)),
             "--max-planner-age-s",
@@ -96,6 +98,7 @@ def main():
             "--flow-motion-threshold",
             str(float(args.flow_motion_threshold)),
         ]
+        cmd[3:3] = [str(path) for path in bag_paths]
         if int(args.export_limit) > 0:
             cmd.extend(["--limit", str(int(args.export_limit))])
         run_step(cmd, project_dir)
