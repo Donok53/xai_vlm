@@ -1,0 +1,83 @@
+{
+  "num_rows": 150,
+  "num_train": 120,
+  "num_test": 30,
+  "effective_test_size": 0.2,
+  "classes": [
+    "문",
+    "벽",
+    "사람",
+    "쓰레기통"
+  ],
+  "report": {
+    "문": {
+      "precision": 0.5,
+      "recall": 0.75,
+      "f1-score": 0.6,
+      "support": 4.0
+    },
+    "벽": {
+      "precision": 0.8181818181818182,
+      "recall": 0.6428571428571429,
+      "f1-score": 0.7200000000000001,
+      "support": 14.0
+    },
+    "사람": {
+      "precision": 0.8888888888888888,
+      "recall": 0.8888888888888888,
+      "f1-score": 0.8888888888888888,
+      "support": 9.0
+    },
+    "쓰레기통": {
+      "precision": 0.75,
+      "recall": 1.0,
+      "f1-score": 0.8571428571428571,
+      "support": 3.0
+    },
+    "accuracy": 0.7666666666666667,
+    "macro avg": {
+      "precision": 0.7392676767676768,
+      "recall": 0.8204365079365079,
+      "f1-score": 0.7665079365079365,
+      "support": 30.0
+    },
+    "weighted avg": {
+      "precision": 0.7901515151515152,
+      "recall": 0.7666666666666667,
+      "f1-score": 0.7683809523809525,
+      "support": 30.0
+    }
+  },
+  "test_sample_ids": [
+    "sample_00102",
+    "sample_00101",
+    "sample_00006",
+    "sample_00045",
+    "sample_00103",
+    "sample_00055",
+    "sample_00115",
+    "sample_00044",
+    "sample_00084",
+    "sample_00014",
+    "sample_00137",
+    "sample_00064",
+    "sample_00038",
+    "sample_00032",
+    "sample_00012",
+    "sample_00120",
+    "sample_00001",
+    "sample_00121",
+    "sample_00048",
+    "sample_00025",
+    "sample_00033",
+    "sample_00046",
+    "sample_00039",
+    "sample_00116",
+    "sample_00131",
+    "sample_00083",
+    "sample_00074",
+    "sample_00148",
+    "sample_00088",
+    "sample_00124"
+  ]
+}

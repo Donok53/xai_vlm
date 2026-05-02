@@ -353,6 +353,8 @@ rosbag play --clock /home/byeongjae/bagfiles/1.made_map/camera_left.bag
 
 - 기본 rich 추론 노드:
   - `models/record_real_rich_domain_full/student_baseline.joblib`
+- 추가 실내 주행 모델:
+  - `models/indoor3_rich_full/student_baseline.joblib`
 
 즉 새 환경에서는 `git clone` 후 이 모델이 같이 내려오므로,
 `ros_student_xai_rich_node.py`는 추가 복사 없이 바로 실행된다.
