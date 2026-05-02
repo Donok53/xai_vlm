@@ -43,6 +43,8 @@ xai_autonomy_vlm_teacher_distill/
 ├── README.md
 ├── requirements.txt
 ├── models/
+│   ├── indoor3_emergency_rich_full/
+│   │   └── student_baseline.joblib
 │   └── record_real_rich_domain_full/
 │       └── student_baseline.joblib
 ├── data/
@@ -352,6 +354,8 @@ rosbag play --clock /home/byeongjae/bagfiles/1.made_map/camera_left.bag
 바로 추론할 수 있도록 배포용 모델은 `models/` 아래에 둔다.
 
 - 기본 rich 추론 노드:
+  - `models/indoor3_emergency_rich_full/student_baseline.joblib`
+- record_real 기반 rich 모델:
   - `models/record_real_rich_domain_full/student_baseline.joblib`
 - 추가 실내 주행 모델:
   - `models/indoor3_rich_full/student_baseline.joblib`

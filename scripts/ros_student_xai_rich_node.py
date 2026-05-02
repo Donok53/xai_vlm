@@ -395,7 +395,7 @@ class StudentXAIRichNode(object):
                 str(
                     Path(__file__).resolve().parent.parent
                     / "models"
-                    / "record_real_rich_domain_full"
+                    / "indoor3_emergency_rich_full"
                     / "student_baseline.joblib"
                 ),
                 explicit_args,
