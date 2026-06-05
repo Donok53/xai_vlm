@@ -317,6 +317,10 @@ def planning_summary(planner_snapshot, event_data):
     path_change = planning.get("path_change") or {}
     latest = path_change.get("latest") or {}
     global_path = planning.get("global_path") or {}
+    local_path = planning.get("local_path") or {}
+    explainability = source.get("explainability") or {}
+    if not explainability and planner_snapshot:
+        explainability = (planner_snapshot.get("explainability") or {})
     behavior = decision.get("behavior") or {}
     path_blocked = (decision.get("path_blocked") or {}).get("value")
 
@@ -328,9 +332,14 @@ def planning_summary(planner_snapshot, event_data):
         "path_change_seq": int(path_change.get("seq") or 0),
         "path_change_changed": bool(latest.get("changed")),
         "path_change_direction": str(latest.get("direction") or "unknown"),
+        "avoid_direction": str(explainability.get("avoid_direction") or ""),
+        "planner_action_taken": str(explainability.get("action_taken") or ""),
+        "planner_trigger_reason": str(explainability.get("trigger_reason") or ""),
         "path_change_lateral_shift_m": float(latest.get("lateral_shift_m") or 0.0),
         "global_path_length_m": float(global_path.get("length_m") or 0.0),
         "global_path_points": int(global_path.get("points") or 0),
+        "local_path_length_m": float(local_path.get("length_m") or 0.0),
+        "local_path_points": int(local_path.get("points") or 0),
     }
 
 

@@ -52,8 +52,13 @@ xai_autonomy_vlm_teacher_distill/
 └── scripts/
     ├── annotate_teacher_with_ollama.py
     ├── export_camera_only_teacher_dataset.py
-    └── export_teacher_dataset.py
+    ├── export_teacher_dataset.py
+    ├── infer_student_camera_only_visual.py
     ├── prepare_teacher_labels.py
+    ├── ros_student_xai_rich_node.py
+    ├── replay_student_camera_only_realtime.py
+    ├── ros_student_camera_only_node.py
+    ├── run_camera_only_pipeline.py
     └── train_student_baseline.py
 ```
 
@@ -347,6 +352,110 @@ rosbag play --clock /home/byeongjae/bagfiles/1.made_map/camera_left.bag
 
 - `student_baseline/student_baseline.joblib`
 - `student_baseline/metrics.json`
+
+## 9. Rich Student XAI ROS 노드 실행
+
+`ros_student_xai_rich_node.py`는 `/xai/event_log`, `/xai/planner_snapshot`,
+카메라, point cloud, emergency stop, odom을 함께 보고 주행 이유를 ROS topic과
+overlay image로 publish한다.
+
+주요 출력:
+
+- `/student_xai/rich_reason`: student XAI 설명 JSON
+- `/student_xai/rich_overlay`: 카메라 영상 + 설명 패널 overlay
+
+현재 rich node는 다음 우선순위로 주행 상태를 정리한다.
+
+- 목적지 도착: `local_path` 잔여 길이와 제어 정지 기준으로 빠르게 판정
+- 안전모드 정지: emergency stop, behavior stop, command/odom 불일치가 회피/차단보다 우선
+- 회피 방향: stale `path_change`가 아니라 LiDAR obstacle 위치 기준으로 좌/우 회피 판단
+- 정상 경로: 이벤트가 없는 동안에도 카메라 화면과 `/student_xai/rich_reason`을 주기적으로 갱신
+
+### 실시간 확인
+
+터미널 1:
+
+```bash
+source /opt/ros/noetic/setup.bash
+roscore
+```
+
+이미 `roscore`가 떠 있으면 생략해도 된다.
+
+터미널 2:
+
+```bash
+cd /home/byeongjae/code/xai_autonomy_vlm_teacher_distill
+source /opt/ros/noetic/setup.bash
+
+/usr/bin/python3 scripts/ros_student_xai_rich_node.py \
+  _display_window:=true \
+  _render_latest_on_image:=true \
+  _max_image_age_s:=0.6 \
+  _max_planner_age_s:=1.2 \
+  _max_pointcloud_age_s:=1.0 \
+  _normal_status_period_s:=0.5
+```
+
+터미널 3:
+
+```bash
+source /opt/ros/noetic/setup.bash
+
+rosbag play --clock \
+  "/home/byeongjae/bagfiles/7차 주행_실외주행/record_real_20260604_142137.bag"
+```
+
+특정 구간만 빠르게 확인하려면:
+
+```bash
+rosbag play --clock --start=58 --duration=18 \
+  "/home/byeongjae/bagfiles/7차 주행_실외주행/record_real_20260604_142137.bag"
+```
+
+```bash
+rosbag play --clock --start=178 --duration=15 \
+  "/home/byeongjae/bagfiles/7차 주행_실외주행/record_real_20260604_142137.bag"
+```
+
+설명 JSON만 확인:
+
+```bash
+source /opt/ros/noetic/setup.bash
+rostopic echo /student_xai/rich_reason
+```
+
+overlay topic을 별도 창에서 확인:
+
+```bash
+source /opt/ros/noetic/setup.bash
+rqt_image_view /student_xai/rich_overlay
+```
+
+### 결과 토픽까지 새 bag으로 저장
+
+터미널 1에서 `roscore`, 터미널 2에서 rich node를 실행한 뒤,
+터미널 3에서 먼저 record를 시작한다.
+
+```bash
+source /opt/ros/noetic/setup.bash
+
+rosbag record --lz4 -a \
+  -O /home/byeongjae/bagfiles/xai_results/record_real_20260604_142137_with_student_xai_rich.bag
+```
+
+터미널 4에서 원본 bag을 재생한다.
+
+```bash
+source /opt/ros/noetic/setup.bash
+
+rosbag play --clock \
+  "/home/byeongjae/bagfiles/7차 주행_실외주행/record_real_20260604_142137.bag"
+```
+
+재생이 끝나면 `rosbag record` 터미널에서 `Ctrl+C`로 정상 종료한다.
+그러면 원본 토픽에 `/student_xai/rich_reason`, `/student_xai/rich_overlay`가
+추가된 새 bag이 만들어진다.
 
 ## 추론용 배포 모델
 
