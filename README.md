@@ -1,391 +1,113 @@
-# VLM Teacher Distill
+# XAI VLM Rich Student Runtime
 
-`xai_autonomy_driving_explainer`의 런타임 경로는 그대로 두고,
-오프라인에서만 VLM을 teacher로 써서 dataset을 만들기 위한 **독립 프로젝트**다.
+ROS bag을 재생하면서 카메라 영상 위에 student XAI 설명을 overlay하고,
+설명 JSON을 ROS topic으로 publish하는 runtime 프로젝트다.
 
-핵심 아이디어:
+## 1. 설치
 
-- 실행 시점: `YOLO + LiDAR + planner + template`
-- 오프라인 학습 시점: `VLM teacher`
-- 목표: VLM이 추론에 직접 들어오지 않아도, 더 안정적인 semantic label과 설명 템플릿을 만들기
+새 PC 또는 새 환경에서는 ROS Noetic의 Python 환경을 기준으로 실행한다.
+Conda `base`가 켜져 있어도 실행 명령은 `/usr/bin/python3`를 사용한다.
 
-## 현재 포함된 기능
+필수 요소:
 
-1. `scripts/export_teacher_dataset.py`
-   - bag에서 `/xai/event_log`, `/xai/planner_snapshot`, 카메라 이미지, point cloud를 묶어
-     teacher dataset을 만든다.
-   - event 중심 샘플을 뽑는다.
-   - 이미지와 downsampled point cloud를 함께 저장한다.
-   - VLM용 prompt 초안도 metadata에 같이 넣는다.
+- Ubuntu + ROS Noetic
+- Python 3 패키지: `numpy`, `opencv-python`, `scikit-learn`, `Pillow`, `joblib`
+- ROS Python 패키지: `rospy`, `rosbag`, `cv_bridge`
+- 배포 모델: `models/indoor3_emergency_rich_full/student_baseline.joblib`
 
-2. `scripts/annotate_teacher_with_ollama.py`
-   - export한 dataset을 읽고, 이미지 + planner/LiDAR 문맥을 VLM에 보내
-     teacher annotation을 JSONL로 저장한다.
-   - 런타임이 아니라 오프라인 데이터 생성용이다.
-
-3. `scripts/prepare_teacher_labels.py`
-   - `teacher_output_json`이 비어 있어도 raw 응답에서 허용 라벨을 최대한 복구한다.
-   - 너무 드문 클래스는 기본적으로 `벽`으로 접어 baseline 학습이 가능하게 만든다.
-
-4. `scripts/train_student_baseline.py`
-   - 이미지 grayscale 특징 + planner/LiDAR 문맥 특징으로
-     가벼운 `sklearn` baseline student를 학습한다.
-
-5. `scripts/export_camera_only_teacher_dataset.py`
-   - XAI 토픽 없이 카메라 이미지만으로 teacher dataset을 만든다.
-   - `prev/current/next` 3프레임을 같이 저장하고 optical flow 기반 움직임 요약을 metadata에 넣는다.
-   - camera-only teacher가 “왜 그런 주행을 했는지”를 시각 단서만으로 답하게 만들기 위한 경로다.
-
-## 구조
-
-```text
-xai_autonomy_vlm_teacher_distill/
-├── README.md
-├── requirements.txt
-├── models/
-│   ├── indoor3_emergency_rich_full/
-│   │   └── student_baseline.joblib
-│   └── record_real_rich_domain_full/
-│       └── student_baseline.joblib
-├── data/
-│   └── .gitkeep
-└── scripts/
-    ├── annotate_teacher_with_ollama.py
-    ├── export_camera_only_teacher_dataset.py
-    ├── export_teacher_dataset.py
-    ├── infer_student_camera_only_visual.py
-    ├── prepare_teacher_labels.py
-    ├── ros_student_xai_rich_node.py
-    ├── replay_student_camera_only_realtime.py
-    ├── ros_student_camera_only_node.py
-    ├── run_camera_only_pipeline.py
-    └── train_student_baseline.py
-```
-
-## 권장 실행 환경
-
-ROS bag를 직접 읽으므로 `/usr/bin/python3` 기준이 가장 안전하다.
+설치 예시:
 
 ```bash
+sudo apt update
+
+sudo apt install -y \
+  git \
+  python3-pip \
+  python3-opencv \
+  python3-pil \
+  python3-sklearn \
+  python3-joblib \
+  fonts-nanum \
+  ros-noetic-ros-base \
+  ros-noetic-rosbag \
+  ros-noetic-rostopic \
+  ros-noetic-cv-bridge \
+  ros-noetic-rqt-image-view
+```
+
+저장소 clone:
+
+```bash
+mkdir -p ~/code
+cd ~/code
+
+git clone https://github.com/Donok53/xai_vlm.git xai_autonomy_vlm_teacher_distill
 cd ~/code/xai_autonomy_vlm_teacher_distill
+```
+
+Python 의존성 설치:
+
+```bash
+/usr/bin/python3 -m pip install --user -r requirements.txt
+```
+
+ROS 환경 로드:
+
+```bash
 source /opt/ros/noetic/setup.bash
 ```
 
-## 1. Teacher Dataset Export
-
-기본 예시:
+모델 파일 확인:
 
 ```bash
-/usr/bin/python3 scripts/export_teacher_dataset.py \
-  --bag /home/byeongjae/bagfiles/record_real_20260422_180049.bag \
-  --output-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_teacher
+ls models/indoor3_emergency_rich_full/student_baseline.joblib
 ```
 
-생성 결과:
+## 2. Bagfile 토픽
 
-- `images/*.jpg`
-- `pointcloud/*.npz`
-- `metadata/teacher_dataset.jsonl`
+rich runtime 노드는 아래 입력 토픽을 사용한다. bag에 모든 토픽이 있으면 가장 안정적으로 동작한다.
 
-`teacher_dataset.jsonl` 한 줄에는 대략 이런 정보가 들어간다.
+| Topic | Type | 설명 |
+| --- | --- | --- |
+| `/camera/color/image_raw` | `sensor_msgs/Image` | overlay를 만들 카메라 원본 영상 |
+| `/xai/event_log` | `std_msgs/String` | 이벤트 중심 XAI JSON 로그. 회피, 정지, 상태 변화의 핵심 입력 |
+| `/xai/planner_snapshot` | `std_msgs/String` | planner/control/planning 최신 snapshot JSON |
+| `/planning/linefit_ground/non_ground_cloud` | `sensor_msgs/PointCloud2` | 비지면 point cloud. 장애물 문맥 보조 |
+| `/planning/near_field_stop_hits` | `sensor_msgs/PointCloud2` | 근거리 정지 후보 point cloud |
+| `/planning/emergency_stop` | `std_msgs/Bool` | 안전모드/긴급정지 상태 |
+| `/astar/path_blocked` | `std_msgs/Bool` | A* 경로 차단 여부 |
+| `/astar/path` | `nav_msgs/Path` | global path와 최종 목적지 위치 |
+| `/lio_localizer/odometry/optimization` | `nav_msgs/Odometry` | 실제 이동/정지 판단용 odom |
 
-- `sample_id`
-- `stamp`
-- `event_label`
-- `planner_reason`
-- `motion_state`
-- `path_blocked`
-- `image_path`
-- `pointcloud_path`
-- `teacher_prompt_ko`
-- 원본 `event_log`, `planner_snapshot`
+출력 토픽:
 
-### Camera-only Temporal Export
+| Topic | Type | 설명 |
+| --- | --- | --- |
+| `/student_xai/rich_reason` | `std_msgs/String` | student XAI 설명 JSON |
+| `/student_xai/rich_overlay` | `sensor_msgs/Image` | 카메라 영상 + 설명 패널 overlay |
 
-XAI 토픽 없이 카메라만으로 teacher dataset을 만들려면:
+주요 판정 기준:
 
-```bash
-/usr/bin/python3 scripts/export_camera_only_teacher_dataset.py \
-  --bag /home/byeongjae/bagfiles/record_real_20260422_180049.bag \
-  --output-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_camera_only \
-  --sample-every-n 8
-```
+- 안전모드 정지는 경로 차단/회피보다 우선한다.
+- 목적지 도착은 `local_path` 잔여 길이와 제어 정지 상태를 함께 보고 판단한다.
+- 좌/우 회피는 stale `path_change`가 아니라 LiDAR obstacle 위치를 우선 사용한다.
+- 이벤트가 없는 동안에도 정상 경로 상태를 주기적으로 출력한다.
 
-여러 bag를 하나의 학습셋으로 묶을 수도 있다:
+## 3. 실행 명령어
 
-```bash
-/usr/bin/python3 scripts/export_camera_only_teacher_dataset.py \
-  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag /home/byeongjae/bagfiles/1.made_map/camera_right.bag \
-  --output-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/made_map_camera_lr \
-  --sample-every-n 24
-```
+아래 예시는 실외 주행 bag `record_real_20260604_142137.bag` 기준이다.
 
-생성 결과:
-
-- `images/sample_xxxxx_prev.jpg`
-- `images/sample_xxxxx_current.jpg`
-- `images/sample_xxxxx_next.jpg`
-- `metadata/teacher_dataset.jsonl`
-
-여기에는:
-
-- `temporal_image_paths`
-- `motion_summary`
-- `teacher_prompt_camera_only_ko`
-- `source_bag`
-- `source_bag_stem`
-
-가 함께 들어간다.
-
-## 2. Ollama Teacher Annotation
-
-예시:
-
-```bash
-/usr/bin/python3 - <<'PY'
-print("권장 teacher 모델:", "qwen2.5vl:32b-q4_K_M")
-print("필요시 먼저 실행: ollama pull qwen2.5vl:32b-q4_K_M")
-PY
-```
-
-```bash
-/usr/bin/python3 scripts/annotate_teacher_with_ollama.py \
-  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_teacher \
-  --model qwen2.5vl:32b-q4_K_M \
-  --prompt-mode class_only
-```
-
-출력:
-
-- `annotations/teacher_labels.jsonl`
-
-각 라인은:
-
-- `sample_id`
-- `model`
-- `prompt_mode`
-- `teacher_output_raw`
-- `teacher_output_json`
-
-형태로 저장된다.
-
-camera-only temporal teacher 예시:
-
-```bash
-/usr/bin/python3 scripts/annotate_teacher_with_ollama.py \
-  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_camera_only \
-  --model qwen2.5vl:32b-q4_K_M \
-  --prompt-mode camera_reason_temporal \
-  --prewarm \
-  --timeout-s 1800 \
-  --max-image-side-px 256 \
-  --jpeg-quality 60 \
-  --num-predict 96 \
-  --num-ctx 384
-```
-
-권장:
-
-- teacher 품질이 중요하므로 기본 teacher는 `qwen2.5vl:32b-q4_K_M`
-- 프롬프트는 `class_only`
-  - 허용 클래스 중 하나만 선택하게 해서 student용 라벨 품질을 우선 높인다.
-- 현재 장비처럼 GPU 메모리가 충분하면 `32b`를 우선 시도하고, 속도가 너무 느릴 때만 `7b`로 내린다.
-
-## 3. Teacher 라벨 정규화
-
-현재 작은 로컬 VLM은 JSON을 안정적으로 주지 않을 수 있으므로,
-raw 응답에서 허용 라벨을 다시 뽑는 단계가 필요하다.
-
-```bash
-/usr/bin/python3 scripts/prepare_teacher_labels.py \
-  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_teacher
-```
-
-출력:
-
-- `metadata/prepared_teacher_labels.jsonl`
-
-## 4. Baseline Student 학습
-
-```bash
-/usr/bin/python3 scripts/train_student_baseline.py \
-  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/record_real_teacher
-```
-
-## 5. One-shot Camera-only Pipeline
-
-라벨링부터 student 학습까지 한 번에 돌리려면:
-
-```bash
-/usr/bin/python3 scripts/run_camera_only_pipeline.py \
-  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag /home/byeongjae/bagfiles/1.made_map/camera_right.bag \
-  --output-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/made_map_camera_lr_full \
-  --sample-every-n 24 \
-  --model qwen2.5vl:32b-q4_K_M \
-  --prompt-mode camera_reason_temporal \
-  --timeout-s 1800 \
-  --retries 1 \
-  --prewarm \
-  --max-image-side-px 256 \
-  --annotate-jpeg-quality 60 \
-  --num-predict 96 \
-  --num-ctx 384 \
-  --overwrite
-```
-
-빠른 점검용으로 일부 샘플만 먼저 돌릴 수도 있다:
-
-```bash
-/usr/bin/python3 scripts/run_camera_only_pipeline.py \
-  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag /home/byeongjae/bagfiles/1.made_map/camera_right.bag \
-  --output-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/made_map_camera_lr_quick \
-  --sample-every-n 24 \
-  --max-samples 120 \
-  --annotate-limit 120 \
-  --model qwen2.5vl:32b-q4_K_M \
-  --prompt-mode camera_reason_temporal \
-  --timeout-s 1800 \
-  --retries 1 \
-  --prewarm \
-  --max-image-side-px 256 \
-  --annotate-jpeg-quality 60 \
-  --num-predict 96 \
-  --num-ctx 384 \
-  --overwrite
-```
-
-## 6. Student 추론 시각화
-
-학습된 student가 카메라 장면을 보고 어떤 대표 객체와 주행 이유를 떠올렸는지 영상으로 보려면:
-
-```bash
-/usr/bin/python3 scripts/infer_student_camera_only_visual.py \
-  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/made_map_camera_lr_full \
-  --show-teacher
-```
-
-결과:
-
-- `student_inference/student_camera_reason.mp4`
-
-window로 바로 보고 싶으면:
-
-```bash
-/usr/bin/python3 scripts/infer_student_camera_only_visual.py \
-  --dataset-dir /home/byeongjae/code/xai_autonomy_vlm_teacher_distill/data/made_map_camera_lr_full \
-  --show-teacher \
-  --display-window
-```
-
-## 7. Bag Replay 실시간 추론 보기
-
-학습된 student가 bag를 따라가며 현재 카메라 장면을 어떻게 해석하는지 실시간처럼 보려면:
-
-```bash
-/usr/bin/python3 scripts/replay_student_camera_only_realtime.py \
-  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag \
-  --sample-every-n 8
-```
-
-두 배 빠르게 보고 싶으면:
-
-```bash
-/usr/bin/python3 scripts/replay_student_camera_only_realtime.py \
-  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag \
-  --sample-every-n 8 \
-  --playback-rate 2.0
-```
-
-창은 띄우지 않고 결과만 mp4로 남기려면:
-
-```bash
-/usr/bin/python3 scripts/replay_student_camera_only_realtime.py \
-  --bag /home/byeongjae/bagfiles/1.made_map/camera_left.bag \
-  --sample-every-n 8 \
-  --no-display-window
-```
-
-## 8. rosbag play에 붙여서 ROS 메시지 보기
-
-실제 `rosbag play`를 돌리면서 student 메시지가 ROS 로그와 topic으로 나오게 하려면:
-
-터미널 1:
+터미널 1: ROS master
 
 ```bash
 source /opt/ros/noetic/setup.bash
 roscore
 ```
 
-터미널 2:
+터미널 2: rich student XAI 노드
 
 ```bash
 cd ~/code/xai_autonomy_vlm_teacher_distill
-source /opt/ros/noetic/setup.bash
-/usr/bin/python3 scripts/ros_student_camera_only_node.py _sample_every_n:=8
-```
-
-기본으로 OpenCV 실시간 창이 바로 뜨고, 카메라 장면 위에 student의 생각이 오버레이된다.
-`q`를 누르면 종료된다.
-
-RViz를 같이 띄우고 싶으면:
-
-```bash
-/usr/bin/python3 scripts/ros_student_camera_only_node.py _sample_every_n:=8 _launch_rviz:=true
-```
-
-터미널 3:
-
-```bash
-source /opt/ros/noetic/setup.bash
-rosbag play --clock /home/byeongjae/bagfiles/1.made_map/camera_left.bag
-```
-
-이때 노드는:
-
-- 로그: `[STUDENT-XAI] ...`
-- 메시지 topic: `/student_xai/camera_reason`
-- overlay image topic: `/student_xai/overlay`
-
-를 내보낸다.
-
-출력:
-
-- `student_baseline/student_baseline.joblib`
-- `student_baseline/metrics.json`
-
-## 9. Rich Student XAI ROS 노드 실행
-
-`ros_student_xai_rich_node.py`는 `/xai/event_log`, `/xai/planner_snapshot`,
-카메라, point cloud, emergency stop, odom을 함께 보고 주행 이유를 ROS topic과
-overlay image로 publish한다.
-
-주요 출력:
-
-- `/student_xai/rich_reason`: student XAI 설명 JSON
-- `/student_xai/rich_overlay`: 카메라 영상 + 설명 패널 overlay
-
-현재 rich node는 다음 우선순위로 주행 상태를 정리한다.
-
-- 목적지 도착: `local_path` 잔여 길이와 제어 정지 기준으로 빠르게 판정
-- 안전모드 정지: emergency stop, behavior stop, command/odom 불일치가 회피/차단보다 우선
-- 회피 방향: stale `path_change`가 아니라 LiDAR obstacle 위치 기준으로 좌/우 회피 판단
-- 정상 경로: 이벤트가 없는 동안에도 카메라 화면과 `/student_xai/rich_reason`을 주기적으로 갱신
-
-### 실시간 확인
-
-터미널 1:
-
-```bash
-source /opt/ros/noetic/setup.bash
-roscore
-```
-
-이미 `roscore`가 떠 있으면 생략해도 된다.
-
-터미널 2:
-
-```bash
-cd /home/byeongjae/code/xai_autonomy_vlm_teacher_distill
 source /opt/ros/noetic/setup.bash
 
 /usr/bin/python3 scripts/ros_student_xai_rich_node.py \
@@ -397,7 +119,7 @@ source /opt/ros/noetic/setup.bash
   _normal_status_period_s:=0.5
 ```
 
-터미널 3:
+터미널 3: bag 재생
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -406,7 +128,7 @@ rosbag play --clock \
   "/home/byeongjae/bagfiles/7차 주행_실외주행/record_real_20260604_142137.bag"
 ```
 
-특정 구간만 빠르게 확인하려면:
+특정 구간만 빠르게 확인:
 
 ```bash
 rosbag play --clock --start=58 --duration=18 \
@@ -418,24 +140,21 @@ rosbag play --clock --start=178 --duration=15 \
   "/home/byeongjae/bagfiles/7차 주행_실외주행/record_real_20260604_142137.bag"
 ```
 
-설명 JSON만 확인:
+설명 JSON 확인:
 
 ```bash
 source /opt/ros/noetic/setup.bash
 rostopic echo /student_xai/rich_reason
 ```
 
-overlay topic을 별도 창에서 확인:
+overlay topic 확인:
 
 ```bash
 source /opt/ros/noetic/setup.bash
 rqt_image_view /student_xai/rich_overlay
 ```
 
-### 결과 토픽까지 새 bag으로 저장
-
-터미널 1에서 `roscore`, 터미널 2에서 rich node를 실행한 뒤,
-터미널 3에서 먼저 record를 시작한다.
+결과 토픽까지 새 bag으로 저장하려면, 노드를 실행한 상태에서 먼저 record를 시작한다.
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -444,7 +163,7 @@ rosbag record --lz4 -a \
   -O /home/byeongjae/bagfiles/xai_results/record_real_20260604_142137_with_student_xai_rich.bag
 ```
 
-터미널 4에서 원본 bag을 재생한다.
+그 다음 원본 bag을 재생한다.
 
 ```bash
 source /opt/ros/noetic/setup.bash
@@ -453,37 +172,4 @@ rosbag play --clock \
   "/home/byeongjae/bagfiles/7차 주행_실외주행/record_real_20260604_142137.bag"
 ```
 
-재생이 끝나면 `rosbag record` 터미널에서 `Ctrl+C`로 정상 종료한다.
-그러면 원본 토픽에 `/student_xai/rich_reason`, `/student_xai/rich_overlay`가
-추가된 새 bag이 만들어진다.
-
-## 추론용 배포 모델
-
-학습 데이터셋 전체(`data/...`)는 git에 올리지 않지만,
-바로 추론할 수 있도록 배포용 모델은 `models/` 아래에 둔다.
-
-- 기본 rich 추론 노드:
-  - `models/indoor3_emergency_rich_full/student_baseline.joblib`
-- record_real 기반 rich 모델:
-  - `models/record_real_rich_domain_full/student_baseline.joblib`
-- 추가 실내 주행 모델:
-  - `models/indoor3_rich_full/student_baseline.joblib`
-
-즉 새 환경에서는 `git clone` 후 이 모델이 같이 내려오므로,
-`ros_student_xai_rich_node.py`는 추가 복사 없이 바로 실행된다.
-
-## 의도한 다음 단계
-
-이 프로젝트의 목표는 바로 student 학습까지 끝내는 것이 아니라,
-우선 아래 파이프라인을 안정화하는 것이다.
-
-1. bag -> teacher dataset export
-2. dataset -> VLM teacher label
-3. teacher label 정규화
-4. 작은 student classifier / template selector 학습
-
-## 참고
-
-- 현재 class 해석은 `xai_autonomy_driving_explainer`에서 쓰는 whitelist 철학을 그대로 따른다.
-- 런타임 project는 수정하지 않고, 여기서는 오프라인 teacher dataset만 다룬다.
-- 이 폴더는 기존 `xai_autonomy_driving_explainer` repo 밖에 따로 둔 실험용 프로젝트다.
+재생이 끝나면 `rosbag record` 터미널에서 `Ctrl+C`로 종료한다.
