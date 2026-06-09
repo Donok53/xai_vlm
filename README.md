@@ -13,7 +13,7 @@ Conda `base`가 켜져 있어도 실행 명령은 `/usr/bin/python3`를 사용�
 - Ubuntu + ROS Noetic
 - Python 3 패키지: `numpy`, `opencv-python`, `scikit-learn`, `Pillow`, `joblib`
 - ROS Python 패키지: `rospy`, `rosbag`, `cv_bridge`
-- 배포 모델: `models/indoor3_emergency_rich_full/student_baseline.joblib`
+- 배포 모델: `models/outdoor_sign_vehicle_rich_full/student_baseline.joblib`
 
 설치 예시:
 
@@ -60,7 +60,7 @@ source /opt/ros/noetic/setup.bash
 모델 파일 확인:
 
 ```bash
-ls models/indoor3_emergency_rich_full/student_baseline.joblib
+ls models/outdoor_sign_vehicle_rich_full/student_baseline.joblib
 ```
 
 ## 2. Bagfile 토픽
@@ -83,7 +83,7 @@ rich runtime 노드는 아래 입력 토픽을 사용한다. bag에 모든 토�
 
 | Topic | Type | 설명 |
 | --- | --- | --- |
-| `/student_xai/rich_reason` | `std_msgs/String` | student XAI 설명 JSON |
+| `/xai/vlm_log` | `std_msgs/String` | student XAI 설명 JSON |
 | `/student_xai/rich_overlay` | `sensor_msgs/Image` | 카메라 영상 + 설명 패널 overlay |
 
 주요 판정 기준:
@@ -144,7 +144,7 @@ rosbag play --clock --start=178 --duration=15 \
 
 ```bash
 source /opt/ros/noetic/setup.bash
-rostopic echo /student_xai/rich_reason
+rostopic echo /xai/vlm_log
 ```
 
 overlay topic 확인:
