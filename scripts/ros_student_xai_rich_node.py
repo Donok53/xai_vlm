@@ -597,7 +597,7 @@ class StudentXAIRichNode(object):
             "astar_path_blocked_topic", "/astar/path_blocked", explicit_args
         )
         self.global_path_topic = get_private_param("global_path_topic", "/astar/path", explicit_args)
-        self.output_topic = get_private_param("output_topic", "/student_xai/rich_reason", explicit_args)
+        self.output_topic = get_private_param("output_topic", "/xai/vlm_log", explicit_args)
         self.overlay_topic = get_private_param("overlay_topic", "/student_xai/rich_overlay", explicit_args)
         self.model_path = Path(
             get_private_param(
@@ -605,7 +605,7 @@ class StudentXAIRichNode(object):
                 str(
                     Path(__file__).resolve().parent.parent
                     / "models"
-                    / "indoor3_emergency_rich_full"
+                    / "outdoor_sign_vehicle_rich_full"
                     / "student_baseline.joblib"
                 ),
                 explicit_args,

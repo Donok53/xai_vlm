@@ -6,71 +6,91 @@ from collections import Counter
 
 
 ALLOWED_LABELS_KO = [
-    "정지 표지판",
-    "주차 미터기",
-    "손가방",
-    "자전거",
-    "자동차",
-    "오토바이",
-    "신호등",
-    "소화전",
-    "벤치",
-    "고양이",
     "사람",
-    "트럭",
-    "기차",
-    "가방",
-    "우산",
-    "캐리어",
-    "와인잔",
-    "시계",
-    "병",
-    "컵",
-    "공",
-    "개",
-    "책",
-    "로봇",
+    "차량",
+    "주차금지 표지판",
+    "정지 표지판",
+    "안전 표지판",
+    "안전봉",
+    "주차콘",
     "쓰레기통",
     "나무",
-    "안전봉",
-    "문",
     "벽",
+    "기타 장애물",
 ]
 
 EN_TO_KO = {
     "person": "사람",
-    "bicycle": "자전거",
-    "car": "자동차",
-    "motorcycle": "오토바이",
-    "train": "기차",
-    "truck": "트럭",
-    "traffic light": "신호등",
-    "fire hydrant": "소화전",
+    "vehicle": "차량",
+    "car": "차량",
+    "sedan": "차량",
+    "suv": "차량",
+    "van": "차량",
+    "bus": "차량",
+    "truck": "차량",
+    "pickup truck": "차량",
+    "no parking sign": "주차금지 표지판",
+    "no-parking sign": "주차금지 표지판",
+    "parking prohibition sign": "주차금지 표지판",
     "stop sign": "정지 표지판",
-    "parking meter": "주차 미터기",
-    "bench": "벤치",
-    "cat": "고양이",
-    "dog": "개",
-    "backpack": "가방",
-    "umbrella": "우산",
-    "handbag": "손가방",
-    "suitcase": "캐리어",
-    "sports ball": "공",
-    "bottle": "병",
-    "cup": "컵",
-    "wine glass": "와인잔",
-    "book": "책",
-    "clock": "시계",
-    "robot": "로봇",
+    "safety sign": "안전 표지판",
+    "warning sign": "안전 표지판",
+    "caution sign": "안전 표지판",
+    "construction sign": "안전 표지판",
+    "traffic sign": "안전 표지판",
+    "signboard": "안전 표지판",
+    "sign": "안전 표지판",
+    "traffic cone": "주차콘",
+    "cone": "주차콘",
+    "bollard": "안전봉",
+    "safety bollard": "안전봉",
+    "post": "안전봉",
     "trash can": "쓰레기통",
     "garbage can": "쓰레기통",
     "bin": "쓰레기통",
     "tree": "나무",
-    "traffic cone": "안전봉",
-    "bollard": "안전봉",
-    "door": "문",
     "wall": "벽",
+    "fence": "벽",
+    "building wall": "벽",
+    "obstacle": "기타 장애물",
+    "unknown obstacle": "기타 장애물",
 }
+
+KO_ALIASES = {
+    "자동차": "차량",
+    "승용차": "차량",
+    "승합차": "차량",
+    "트럭": "차량",
+    "버스": "차량",
+    "차": "차량",
+    "차량": "차량",
+    "주차 금지 표지판": "주차금지 표지판",
+    "주차금지표지판": "주차금지 표지판",
+    "주차금지 표지판": "주차금지 표지판",
+    "정지표지판": "정지 표지판",
+    "정지 표지판": "정지 표지판",
+    "주의 표지판": "안전 표지판",
+    "안내 표지판": "안전 표지판",
+    "공사 표지판": "안전 표지판",
+    "통제 표지판": "안전 표지판",
+    "안전 표지판": "안전 표지판",
+    "입간판": "안전 표지판",
+    "표지판": "안전 표지판",
+    "라바콘": "주차콘",
+    "주차 콘": "주차콘",
+    "주차콘": "주차콘",
+    "콘": "주차콘",
+    "볼라드": "안전봉",
+    "안전봉": "안전봉",
+    "쓰레기통": "쓰레기통",
+    "나무": "나무",
+    "벽": "벽",
+    "담장": "벽",
+    "기타 장애물": "기타 장애물",
+    "장애물": "기타 장애물",
+}
+
+PROTECTED_LABELS_KO = set(ALLOWED_LABELS_KO) - {"기타 장애물"}
 
 
 def parse_args():
@@ -101,6 +121,8 @@ def normalize_label(row):
     raw = str(row.get("teacher_output_raw") or "").strip()
 
     primary_ko = str(parsed.get("primary_object_ko") or "").strip()
+    if primary_ko in KO_ALIASES:
+        return KO_ALIASES[primary_ko], "json_primary_object_ko_alias"
     if primary_ko in ALLOWED_LABELS_KO:
         return primary_ko, "json_primary_object_ko"
 
@@ -112,14 +134,17 @@ def normalize_label(row):
     for label in sorted(ALLOWED_LABELS_KO, key=len, reverse=True):
         if label in raw:
             return label, "raw_substring_ko"
+    for alias, label_ko in sorted(KO_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        if alias in raw:
+            return label_ko, "raw_substring_ko_alias"
     for label_en, label_ko in sorted(EN_TO_KO.items(), key=lambda item: len(item[0]), reverse=True):
         if label_en in raw_lower:
             return label_ko, "raw_substring_en"
 
     if ("없음" in raw) or ("대표의 것" in raw) or ("판단" in raw) or not raw:
-        return "벽", "fallback_wall"
+        return "기타 장애물", "fallback_other_obstacle"
 
-    return "벽", "fallback_wall"
+    return "기타 장애물", "fallback_other_obstacle"
 
 
 def main():
@@ -190,8 +215,8 @@ def main():
     collapsed_counter = Counter()
     for row in prepared_rows:
         label_ko = row["label_ko_raw"]
-        if raw_counter[label_ko] < int(args.min_class_count):
-            row["label_ko"] = "벽"
+        if label_ko not in PROTECTED_LABELS_KO and raw_counter[label_ko] < int(args.min_class_count):
+            row["label_ko"] = "기타 장애물"
             row["label_collapsed"] = True
         else:
             row["label_ko"] = label_ko
