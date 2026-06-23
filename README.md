@@ -209,6 +209,29 @@ source /opt/ros/noetic/setup.bash
 rqt_image_view /student_xai/rich_overlay
 ```
 
+웹 화면 확인:
+
+```bash
+http://127.0.0.1:8090/
+```
+
+대시보드의 `실시간 VLM 화면` 패널은 기본으로 아래 스트림을 표시한다.
+
+```bash
+http://127.0.0.1:8090/stream.mjpg
+```
+
+rich student XAI 노드는 `cv2.imshow()`에 표시하는 overlay frame을 같은 주소로도 내보낸다.
+필요하면 실행 옵션으로 주소를 바꿀 수 있다.
+
+```bash
+/usr/bin/python3 scripts/ros_student_xai_rich_node.py \
+  _web_stream:=true \
+  _web_stream_host:=127.0.0.1 \
+  _web_stream_port:=8090 \
+  _web_stream_path:=/stream.mjpg
+```
+
 결과 토픽까지 새 bag으로 저장하려면, 노드를 실행한 상태에서 먼저 record를 시작한다.
 
 ```bash

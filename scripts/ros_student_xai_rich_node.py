@@ -29,6 +29,7 @@ from export_teacher_dataset import (
     stamp_to_float,
 )
 from model_runtime_common import default_model_path, load_model_info, model_log_fields
+from mjpeg_streamer import MjpegStreamer
 from student_baseline_common import build_context_feature, load_image_feature_from_bgr
 
 
@@ -625,6 +626,11 @@ class StudentXAIRichNode(object):
         self.normal_status_period_s = float(get_private_param("normal_status_period_s", 1.0, explicit_args))
         self.render_latest_on_image = _coerce_bool(get_private_param("render_latest_on_image", True, explicit_args))
         self.log_every_event = _coerce_bool(get_private_param("log_every_event", True, explicit_args))
+        self.web_stream = _coerce_bool(get_private_param("web_stream", True, explicit_args))
+        self.web_stream_host = str(get_private_param("web_stream_host", "127.0.0.1", explicit_args))
+        self.web_stream_port = int(get_private_param("web_stream_port", 8090, explicit_args))
+        self.web_stream_path = str(get_private_param("web_stream_path", "/stream.mjpg", explicit_args))
+        self.web_streamer = None
 
         bundle = joblib.load(str(self.model_path))
         self.model = bundle["model"]
@@ -665,9 +671,26 @@ class StudentXAIRichNode(object):
             self.astar_path_blocked_topic, Bool, self._on_astar_path_blocked, queue_size=20
         )
         self.global_path_sub = rospy.Subscriber(self.global_path_topic, NavPath, self._on_global_path, queue_size=2)
+        if self.web_stream:
+            self.web_streamer = MjpegStreamer(
+                host=self.web_stream_host,
+                port=self.web_stream_port,
+                stream_path=self.web_stream_path,
+                title="student_xai_rich_realtime",
+            )
+            if self.web_streamer.start():
+                rospy.loginfo("student_xai_rich web stream started | url=%s", self.web_streamer.stream_url)
+            else:
+                rospy.logwarn(
+                    "student_xai_rich web stream 시작 실패 | host=%s port=%s",
+                    self.web_stream_host,
+                    self.web_stream_port,
+                )
+                self.web_streamer = None
+        rospy.on_shutdown(self._on_shutdown)
 
         rospy.loginfo(
-            "student_xai_rich_node started | image=%s event=%s planner=%s point_cloud=%s stop_hits=%s emergency=%s astar_blocked=%s global_path=%s odom=%s output=%s overlay=%s model=%s display_window=%s",
+            "student_xai_rich_node started | image=%s event=%s planner=%s point_cloud=%s stop_hits=%s emergency=%s astar_blocked=%s global_path=%s odom=%s output=%s overlay=%s model=%s display_window=%s web_stream=%s",
             self.image_topic,
             self.event_topic,
             self.planner_topic,
@@ -681,7 +704,12 @@ class StudentXAIRichNode(object):
             self.overlay_topic,
             self.model_path,
             self.display_window,
+            self.web_streamer.stream_url if self.web_streamer is not None else "off",
         )
+
+    def _on_shutdown(self):
+        if self.web_streamer is not None:
+            self.web_streamer.stop()
 
     def _on_image(self, msg):
         self.frame_index += 1
@@ -797,6 +825,8 @@ class StudentXAIRichNode(object):
         overlay_msg = self.bridge.cv2_to_imgmsg(self.overlay_bgr, encoding="bgr8")
         overlay_msg.header = header
         self.overlay_pub.publish(overlay_msg)
+        if self.web_streamer is not None:
+            self.web_streamer.update(self.overlay_bgr)
 
         if self.display_window:
             cv2.imshow("student_xai_rich_realtime", self.overlay_bgr)

@@ -18,6 +18,7 @@ from std_msgs.msg import String
 
 from export_camera_only_teacher_dataset import infer_ego_motion_ko, infer_scene_state_ko, summarize_flow
 from model_runtime_common import default_model_path, load_model_info, model_log_fields
+from mjpeg_streamer import MjpegStreamer
 from student_baseline_common import build_context_feature, load_image_feature_from_bgr
 
 
@@ -191,6 +192,11 @@ class StudentCameraOnlyNode(object):
         self.flow_motion_threshold = float(get_private_param("flow_motion_threshold", 1.5, explicit_args))
         self.display_window = _coerce_bool(get_private_param("display_window", True, explicit_args))
         self.launch_rviz = _coerce_bool(get_private_param("launch_rviz", False, explicit_args))
+        self.web_stream = _coerce_bool(get_private_param("web_stream", True, explicit_args))
+        self.web_stream_host = str(get_private_param("web_stream_host", "127.0.0.1", explicit_args))
+        self.web_stream_port = int(get_private_param("web_stream_port", 8090, explicit_args))
+        self.web_stream_path = str(get_private_param("web_stream_path", "/stream.mjpg", explicit_args))
+        self.web_streamer = None
         self.rviz_config_path = Path(
             get_private_param(
                 "rviz_config_path",
@@ -213,15 +219,32 @@ class StudentCameraOnlyNode(object):
         self.message_pub = rospy.Publisher(self.output_topic, String, queue_size=10)
         self.overlay_pub = rospy.Publisher(self.overlay_topic, Image, queue_size=2)
         self.sub = rospy.Subscriber(self.image_topic, Image, self._image_callback, queue_size=1)
+        if self.web_stream:
+            self.web_streamer = MjpegStreamer(
+                host=self.web_stream_host,
+                port=self.web_stream_port,
+                stream_path=self.web_stream_path,
+                title="student_camera_only_realtime",
+            )
+            if self.web_streamer.start():
+                rospy.loginfo("student_camera_only web stream started | url=%s", self.web_streamer.stream_url)
+            else:
+                rospy.logwarn(
+                    "student_camera_only web stream 시작 실패 | host=%s port=%s",
+                    self.web_stream_host,
+                    self.web_stream_port,
+                )
+                self.web_streamer = None
 
         rospy.loginfo(
-            "student_camera_only_node started | image=%s output=%s overlay=%s model=%s display_window=%s launch_rviz=%s",
+            "student_camera_only_node started | image=%s output=%s overlay=%s model=%s display_window=%s launch_rviz=%s web_stream=%s",
             self.image_topic,
             self.output_topic,
             self.overlay_topic,
             self.model_path,
             self.display_window,
             self.launch_rviz,
+            self.web_streamer.stream_url if self.web_streamer is not None else "off",
         )
         if self.launch_rviz:
             self._start_rviz()
@@ -242,6 +265,8 @@ class StudentCameraOnlyNode(object):
             rospy.logwarn("rviz 실행에 실패했습니다: %s", exc)
 
     def _on_shutdown(self):
+        if self.web_streamer is not None:
+            self.web_streamer.stop()
         if self.rviz_process is not None and self.rviz_process.poll() is None:
             try:
                 self.rviz_process.terminate()
@@ -343,6 +368,8 @@ class StudentCameraOnlyNode(object):
         overlay_msg = self.bridge.cv2_to_imgmsg(overlay_bgr, encoding="bgr8")
         overlay_msg.header = msg.header
         self.overlay_pub.publish(overlay_msg)
+        if self.web_streamer is not None:
+            self.web_streamer.update(overlay_bgr)
 
         if self.display_window:
             cv2.imshow("student_camera_only_realtime", overlay_bgr)
