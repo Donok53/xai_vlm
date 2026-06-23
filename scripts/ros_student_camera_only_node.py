@@ -17,6 +17,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
 from export_camera_only_teacher_dataset import infer_ego_motion_ko, infer_scene_state_ko, summarize_flow
+from model_runtime_common import default_model_path, load_model_info, model_log_fields
 from student_baseline_common import build_context_feature, load_image_feature_from_bgr
 
 
@@ -169,19 +170,22 @@ class StudentCameraOnlyNode(object):
         self.image_topic = get_private_param("image_topic", "/camera/color/image_raw", explicit_args)
         self.output_topic = get_private_param("output_topic", "/student_xai/camera_reason", explicit_args)
         self.overlay_topic = get_private_param("overlay_topic", "/student_xai/overlay", explicit_args)
+        legacy_model_path = (
+            Path(__file__).resolve().parent.parent
+            / "data"
+            / "made_map_camera_lr_full"
+            / "student_baseline"
+            / "student_baseline.joblib"
+        )
         self.model_path = Path(
             get_private_param(
                 "model_path",
-                str(
-                    Path(__file__).resolve().parent.parent
-                    / "data"
-                    / "made_map_camera_lr_full"
-                    / "student_baseline"
-                    / "student_baseline.joblib"
-                ),
+                default_model_path(legacy_model_path),
                 explicit_args,
             )
         ).expanduser().resolve()
+        self.model_info = load_model_info(self.model_path)
+        self.model_fields = model_log_fields(self.model_info, self.model_path)
         self.sample_every_n = int(get_private_param("sample_every_n", 8, explicit_args))
         self.flow_image_side_px = int(get_private_param("flow_image_side_px", 320, explicit_args))
         self.flow_motion_threshold = float(get_private_param("flow_motion_threshold", 1.5, explicit_args))
@@ -301,8 +305,10 @@ class StudentCameraOnlyNode(object):
         scene_summary, camera_reason = build_camera_thought(pred_label, row)
         raw_motion, ego_motion, scene_state = describe_motion(row)
         payload = {
+            **self.model_fields,
             "frame_index": int(center["frame_index"]),
             "stamp": center["stamp"],
+            "prediction": pred_label,
             "primary_object_ko": pred_label,
             "confidence": confidence,
             "top_candidates": top_candidates,
@@ -312,6 +318,7 @@ class StudentCameraOnlyNode(object):
             "motion_summary": motion_summary,
             "scene_summary_ko": scene_summary,
             "driving_reason_ko": camera_reason,
+            "explanation": camera_reason,
             "infer_ms": infer_ms,
         }
         self.message_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))

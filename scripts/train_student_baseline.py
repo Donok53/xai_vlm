@@ -84,7 +84,6 @@ def main():
     model = LogisticRegression(
         max_iter=int(args.max_iter),
         class_weight="balanced",
-        multi_class="auto",
     )
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)

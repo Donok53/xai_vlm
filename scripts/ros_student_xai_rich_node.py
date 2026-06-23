@@ -28,6 +28,7 @@ from export_teacher_dataset import (
     summarize_stop_hits_cloud,
     stamp_to_float,
 )
+from model_runtime_common import default_model_path, load_model_info, model_log_fields
 from student_baseline_common import build_context_feature, load_image_feature_from_bgr
 
 
@@ -599,18 +600,21 @@ class StudentXAIRichNode(object):
         self.global_path_topic = get_private_param("global_path_topic", "/astar/path", explicit_args)
         self.output_topic = get_private_param("output_topic", "/xai/vlm_log", explicit_args)
         self.overlay_topic = get_private_param("overlay_topic", "/student_xai/rich_overlay", explicit_args)
+        legacy_model_path = (
+            Path(__file__).resolve().parent.parent
+            / "models"
+            / "outdoor_sign_vehicle_rich_full"
+            / "student_baseline.joblib"
+        )
         self.model_path = Path(
             get_private_param(
                 "model_path",
-                str(
-                    Path(__file__).resolve().parent.parent
-                    / "models"
-                    / "outdoor_sign_vehicle_rich_full"
-                    / "student_baseline.joblib"
-                ),
+                default_model_path(legacy_model_path),
                 explicit_args,
             )
         ).expanduser().resolve()
+        self.model_info = load_model_info(self.model_path)
+        self.model_fields = model_log_fields(self.model_info, self.model_path)
         self.flow_image_side_px = int(get_private_param("flow_image_side_px", 320, explicit_args))
         self.flow_motion_threshold = float(get_private_param("flow_motion_threshold", 1.5, explicit_args))
         self.display_window = _coerce_bool(get_private_param("display_window", True, explicit_args))
@@ -860,9 +864,11 @@ class StudentXAIRichNode(object):
             return
         self.last_normal_status_stamp = image_stamp
         payload = {
+            **self.model_fields,
             "frame_index": int(self.frame_index),
             "stamp": image_stamp,
             "event_label": row["event_label"],
+            "prediction": aux["driving_mode"],
             "primary_object_ko": "장애물 없음",
             "confidence": 0.0,
             "top_candidates": [],
@@ -885,6 +891,7 @@ class StudentXAIRichNode(object):
             "astar_path_blocked": aux["astar_path_blocked"],
             "scene_summary_ko": scene_summary,
             "driving_reason_ko": reason,
+            "explanation": reason,
             "infer_ms": 0.0,
         }
         self.message_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))
@@ -1088,9 +1095,11 @@ class StudentXAIRichNode(object):
             self.current_summary_payload = new_summary_payload
 
         payload = {
+            **self.model_fields,
             "frame_index": int(center["frame_index"]),
             "stamp": center["stamp"],
             "event_label": row["event_label"],
+            "prediction": aux["driving_mode"],
             "primary_object_ko": pred_label,
             "confidence": confidence,
             "top_candidates": top_candidates,
@@ -1113,6 +1122,7 @@ class StudentXAIRichNode(object):
             "astar_path_blocked": aux["astar_path_blocked"],
             "scene_summary_ko": self.current_summary_payload["scene_summary_ko"],
             "driving_reason_ko": self.current_summary_payload["driving_reason_ko"],
+            "explanation": self.current_summary_payload["driving_reason_ko"],
             "infer_ms": infer_ms,
         }
         self.message_pub.publish(String(data=json.dumps(payload, ensure_ascii=False)))

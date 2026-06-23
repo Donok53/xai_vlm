@@ -11,7 +11,7 @@ Conda `base`가 켜져 있어도 실행 명령은 `/usr/bin/python3`를 사용�
 필수 요소:
 
 - Ubuntu + ROS Noetic
-- Python 3 패키지: `numpy`, `opencv-python`, `scikit-learn`, `Pillow`, `joblib`
+- Python 3 패키지: `numpy`, `opencv-python`, `scikit-learn`, `Pillow`, `joblib`, `mlflow`
 - ROS Python 패키지: `rospy`, `rosbag`, `cv_bridge`
 - 배포 모델: `models/outdoor_sign_vehicle_rich_full/student_baseline.joblib`
 
@@ -60,10 +60,65 @@ source /opt/ros/noetic/setup.bash
 모델 파일 확인:
 
 ```bash
+cat models/current/model_info.json
 ls models/outdoor_sign_vehicle_rich_full/student_baseline.joblib
 ```
 
-## 2. Bagfile 토픽
+runtime은 모델 경로를 아래 순서로 찾는다.
+
+1. `MODEL_PATH` 환경 변수
+2. `MODEL_INFO_PATH` 또는 `models/current/model_info.json`의 `model_path`
+3. `models/current/student_baseline.joblib`
+4. 기존 bundled 모델 `models/outdoor_sign_vehicle_rich_full/student_baseline.joblib`
+
+`/xai/vlm_log` payload에는 `model_name`, `model_version`, `run_id`, `prediction`, `confidence`, `explanation`이 포함된다.
+
+## 2. MLflow 학습 및 모델 승격
+
+teacher label 데이터로 student baseline을 재학습하고 MLflow에 parameter, metric, artifact, model registry 기록을 남긴다.
+
+```bash
+cd ~/code/xai_autonomy_vlm_teacher_distill
+
+/usr/bin/python3 ml/train_student_mlflow.py \
+  --dataset-dir data/record_real_teacher \
+  --dataset-name record_real_teacher \
+  --dataset-version v2 \
+  --output-dir models/student_mlflow_v2 \
+  --experiment-name xai_student_training \
+  --registered-model-name xai_student_model
+```
+
+학습 결과는 `student_baseline.joblib`, `metrics.json`, `classification_report.txt`로 저장되고, MLflow run에는 `accuracy`, `macro_f1`, `weighted_f1`이 기록된다.
+
+성능이 좋은 run을 현재 서비스 모델로 반영:
+
+```bash
+/usr/bin/python3 ml/promote_model.py \
+  --run-id <MLFLOW_RUN_ID> \
+  --artifact-path model/student_baseline.joblib \
+  --version v2 \
+  --accuracy 0.91 \
+  --macro-f1 0.88
+```
+
+로컬 파일을 바로 champion으로 반영할 수도 있다.
+
+```bash
+/usr/bin/python3 ml/promote_model.py \
+  --source-model-path models/student_mlflow_v2/student_baseline.joblib \
+  --version v2 \
+  --accuracy 0.91 \
+  --macro-f1 0.88
+```
+
+필요하면 이전 모델로 되돌린다.
+
+```bash
+/usr/bin/python3 ml/rollback_model.py --version v1
+```
+
+## 3. Bagfile 토픽
 
 rich runtime 노드는 아래 입력 토픽을 사용한다. bag에 모든 토픽이 있으면 가장 안정적으로 동작한다.
 
@@ -93,7 +148,7 @@ rich runtime 노드는 아래 입력 토픽을 사용한다. bag에 모든 토�
 - 좌/우 회피는 stale `path_change`가 아니라 LiDAR obstacle 위치를 우선 사용한다.
 - 이벤트가 없는 동안에도 정상 경로 상태를 주기적으로 출력한다.
 
-## 3. 실행 명령어
+## 4. 실행 명령어
 
 아래 예시는 실외 주행 bag `record_real_20260604_142137.bag` 기준이다.
 

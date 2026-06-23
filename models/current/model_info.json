@@ -1,0 +1,10 @@
+{
+  "model_name": "xai_student_model",
+  "version": "outdoor-rich-v1",
+  "run_id": "local-outdoor-sign-vehicle-rich-full",
+  "accuracy": 0.6240601503759399,
+  "macro_f1": 0.4793488749205388,
+  "promoted_at": "2026-06-23T00:00:00+00:00",
+  "status": "champion",
+  "model_path": "models/outdoor_sign_vehicle_rich_full/student_baseline.joblib"
+}
